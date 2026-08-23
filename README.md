@@ -151,13 +151,39 @@ PYTHONPATH=src .venv/Scripts/python -m pytest -q
 PYTHONPATH=src .venv/Scripts/python -c "from recoup.generator.synthetic import ScenarioGenerator; from recoup.measure.harness import run, compare; from recoup.policy.strategies import STRATEGIES; s=ScenarioGenerator().generate(5000); print(compare([run(s,f,n) for n,f in STRATEGIES.items()]))"
 ```
 
+## Audit trail
+
+Every decision lands in an append-only, hash-chained ledger answering six questions:
+what we saw, what we wanted, what we were allowed, what we did, what happened, and
+which arm it was in. Gate reasons are stored verbatim, not re-derived. Editing,
+deleting, reordering, or re-sealing a record all fail verification.
+
+```
+[2] 2026-09-01T03:15:00+05:30  event=evt_0002 customer=cust_0002  Rs.12,999.00
+  saw       gateway_technical_error -> GATEWAY_DOWN (tier 1)
+  wanted    retry_now
+    ok   consent              not a contact action
+    ok   quiet_hours          not a contact action
+    HOLD value_approval       Rs.12,999 exceeds unattended threshold Rs.5,000
+    ok   idempotency          key unused
+  did       queued_for_approval   [needs_approval]
+  outcome   open   arm=treatment
+```
+
+Rendering one decision as readable text immediately exposed a bug that every
+aggregate metric had hidden: `needs_approval` was collapsing into `no_action`,
+silently dropping **536 events worth Rs.60,28,045 — 21% of all at-risk money** —
+with no queue entry and nothing in the metrics. Aggregates hide state-machine bugs
+by construction.
+
 ## Status
 
 Day 1 of 13. Built: failure taxonomy (110 reasons), compliance gate layer (9 gates),
-ground-truth simulator, measurement harness, 40 tests.
+ground-truth simulator, measurement harness, hash-chained audit ledger with replay.
+61 tests, ruff clean, mypy --strict clean.
 
 Not yet built: LLM escalation tier, propensity model, bandit, Razorpay test-mode
-execution path, durable workflows, ops console.
+execution path, durable workflows, ops console, approval-queue reviewer.
 
 ## What this deliberately does not do
 

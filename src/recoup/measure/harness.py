@@ -67,6 +67,7 @@ from recoup.domain import ActionKind, Arm, AtRiskEvent, RiskKind
 from recoup.generator.synthetic import Scenario
 from recoup.policy.gates import (
     CustomerState,
+    Disposition,
     EventState,
     GateContext,
     PolicyConfig,
@@ -183,6 +184,13 @@ class Report:
     @property
     def approvals(self) -> int:
         return sum(1 for o in self.outcomes if o.needed_approval)
+
+    @property
+    def queued_paise(self) -> int:
+        """Money parked awaiting a human. Not lost, not recovered -- visible."""
+        return sum(
+            o.amount_paise for o in self.outcomes if o.executed is ActionKind.QUEUED_FOR_APPROVAL
+        )
 
     @property
     def paise_per_contact(self) -> float:
@@ -363,7 +371,17 @@ def run(
         # A vetoed action does not silently become a different action. It becomes
         # NO_ACTION, and the reason is recorded. Substituting a "safer" message here
         # is exactly the bug that makes compliance layers decorative.
-        executed = intended if verdict.allowed else ActionKind.NO_ACTION
+        #
+        # NEEDS_APPROVAL is a third state, not a denial. It parks the action in a
+        # human queue. Folding it into NO_ACTION -- which this code did until the
+        # decision inspector surfaced it -- silently drops precisely the
+        # highest-value events, with nothing in the metrics to show they existed.
+        if verdict.allowed:
+            executed = intended
+        elif verdict.disposition is Disposition.NEEDS_APPROVAL:
+            executed = ActionKind.QUEUED_FOR_APPROVAL
+        else:
+            executed = ActionKind.NO_ACTION
         if executed.is_contact:
             prior.append(ev.occurred_at)
 

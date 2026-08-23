@@ -124,6 +124,48 @@ is the entire thesis of the project, and it is now measurable rather than assert
 money — because knowing an expired card can never be recovered by a retry is worth
 more than any amount of retry budget.
 
+### Audit ledger, and a bug the inspector found immediately
+
+Built the append-only hash-chained ledger (`src/recoup/ledger.py`). Every decision
+records six things: what we saw, what we wanted, what we were allowed, what we did,
+what happened, and which arm it was in. Gate reasons are stored **verbatim** rather
+than as codes to be re-interpreted later against a config that has since changed —
+an audit trail that recomputes its own explanations is not evidence.
+
+Tamper tests are the ones that matter: editing a record, editing just a gate's
+*reason* string, deleting a record, reordering records, and re-sealing an edited
+record after recomputing its hash. All five fail verification. The last one matters
+most — partial forgery is not enough, because every later record commits to the old
+hash.
+
+Then I printed three sample decisions through `explain()` to check it read well, and
+the third one exposed a live bug.
+
+A ₹12,999 gateway retry at 03:15 correctly passed the quiet-hours gate (a silent
+retry disturbs nobody — only *contact* is time-restricted) but tripped the value
+threshold and came back `needs_approval`. The ledger then showed `did no_action`.
+
+`NEEDS_APPROVAL` is not a denial. It means a human has to look. But the harness had:
+
+```python
+executed = intended if verdict.allowed else ActionKind.NO_ACTION
+```
+
+...which folds "a human has not looked yet" into "we decided not to act". Those are
+different states and must never share a representation. The consequence: **every
+event above the approval threshold was silently dropped** — no queue entry, nothing
+in the metrics, money simply gone. And it hit precisely the highest-value events,
+which are the ones worth most.
+
+Measured after adding `ActionKind.QUEUED_FOR_APPROVAL` and a `queued_paise` metric:
+**536 events, ₹60,28,045 — 21% of all at-risk money** was going on the floor.
+
+The lesson is not "add an enum member". It is that the bug was invisible in every
+aggregate number I had — gross, incremental, lift, CI all looked completely healthy
+— and only became visible when I rendered a single decision as text a human could
+read. Aggregates hide state-machine bugs by construction. Two regression tests now
+pin it.
+
 ### Tomorrow
 
 Razorpay test-mode integration (orders, payment links, subscriptions, webhooks) for
@@ -137,3 +179,5 @@ different questions.
 - No bandit yet; `taxonomy_policy` is pure deterministic routing.
 - Gate thresholds cite RBI FPC / TRAI / DPDP but need a proper source-by-source review.
 - No durable execution yet; the harness runs in-process.
+- The approval queue is now visible but nothing drains it — no reviewer UI yet.
+- Ledger is JSONL; Postgres later means an append-only table plus these same hashes.

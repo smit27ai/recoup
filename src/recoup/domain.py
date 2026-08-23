@@ -44,6 +44,17 @@ class ActionKind(StrEnum):
     ROUTE_TO_OPS = "route_to_ops"
     """Not the customer fault. Goes to a human queue, never to the customer."""
 
+    QUEUED_FOR_APPROVAL = "queued_for_approval"
+    """Permissible, but over an authority limit, so it waits on a human.
+
+    Distinct from NO_ACTION on purpose. Collapsing the two was a real bug: every
+    high-value event -- exactly the ones worth most -- was silently dropped and
+    counted as a decision not to act, so the money vanished with no queue entry and
+    nothing in the metrics to show it had ever been considered. "We chose not to"
+    and "a human has not looked yet" are different states and must never share a
+    representation.
+    """
+
     @property
     def is_contact(self) -> bool:
         return self in {

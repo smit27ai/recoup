@@ -143,3 +143,27 @@ def test_no_strategy_beats_the_oracle_ceiling(scenarios: list) -> None:
     for s, seed in zip(scenarios[:4], SEEDS, strict=False):
         r = run(s, taxonomy_policy, "p", seed=seed)
         assert r.incremental_paise <= r.ceiling_paise
+
+
+def test_high_value_actions_are_queued_not_dropped(scenarios: list) -> None:
+    """Regression: NEEDS_APPROVAL used to collapse into NO_ACTION, silently
+    discarding the highest-value events with nothing in the metrics to show it."""
+    from recoup.domain import ActionKind
+
+    report = run(scenarios[0], taxonomy_policy, "p")
+    queued = [o for o in report.outcomes if o.executed is ActionKind.QUEUED_FOR_APPROVAL]
+    assert queued, "no events hit the approval threshold; the test is not exercising it"
+    assert all(o.needed_approval for o in queued)
+    assert report.queued_paise > 0
+    # None of them may have been recorded as a plain decision not to act.
+    assert all(o.executed is not ActionKind.NO_ACTION for o in queued)
+
+
+def test_queued_money_is_not_counted_as_recovered(scenarios: list) -> None:
+    """Parked money is visible but must never inflate the recovery number."""
+    from recoup.domain import ActionKind
+
+    report = run(scenarios[0], taxonomy_policy, "p")
+    for o in report.outcomes:
+        if o.executed is ActionKind.QUEUED_FOR_APPROVAL:
+            assert not o.was_contact
