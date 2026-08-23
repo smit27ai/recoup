@@ -18,7 +18,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,llm,console]"
+          pip install -e ".[dev,llm,console,workflows]"
 
       - name: Lint
         run: ruff check src tests

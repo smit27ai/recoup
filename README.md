@@ -229,7 +229,64 @@ tier 2) -> policy -> gates -> Razorpay -> ledger, with uncertain-outcome
 reconciliation and a verifiable audit trail. **179 tests, ruff clean, mypy --strict
 clean.**
 
-Not yet built: durable multi-day workflows, LLM message localisation.
+Not yet built: LLM message localisation.
+
+## Durable multi-day workflows
+
+A recovery sequence is not a request. It is a plan that unfolds over days -- try the
+card tonight, wait for payday, ask for a different instrument, wait, escalate, stop.
+Between any two steps the process gets deployed over, the machine dies, and the world
+changes.
+
+An in-process scheduler fails here in a specific, expensive way: the plan lives in
+memory, so a restart either loses the sequence (money quietly abandoned) or replays
+it from the top (the customer gets the same message twice). Temporal makes the
+sequence itself durable.
+
+The escalation ladder is part of the diagnosis, not a global constant:
+
+| root cause | plan |
+|---|---|
+| `FUNDS` | +1d retry, +3d nudge, +7d retry -- spread across a pay cycle, because retrying an empty account four times in an hour is four failures and a worse issuer reputation, not four chances |
+| `INSTRUMENT_INVALID` | +1h ask for another method, +3d ask once more, stop -- a third ask is harassment, not recovery |
+| `GATEWAY_DOWN` | +15m retry, +4h retry, **no contact at all** -- it was never the customer's problem |
+| `INTEGRATION_BUG` | straight to a human, immediately |
+
+### The payoff from a decision made on day one
+
+Temporal replays workflow code from history, so it must be a pure function of its
+inputs -- no clocks, no randomness, no I/O. Every gate in this system already takes
+`now` as an explicit parameter rather than calling `datetime.now()` internally. That
+was done for testability; it turns out to be exactly what makes the gates
+**replay-safe by construction**. Had they read the clock themselves, every gate
+decision would silently change on replay and the audit trail would disagree with
+itself.
+
+Signals stop the sequence rather than annotating it. A `payment.captured` arriving on
+day two halts the plan mid-flight -- the remaining messages are for money that has
+already arrived, and sending them is the most visible way a recovery system
+embarrasses a merchant. Same for opt-out, disputes, and promises to pay.
+
+### Tested in milliseconds, not days
+
+Temporal's time-skipping test environment fast-forwards its own clock whenever every
+workflow is asleep, so a seven-day sequence runs in milliseconds. That makes the
+multi-day properties actually testable rather than asserted-and-hoped:
+
+- consent revoked on day 2 blocks the nudge scheduled for day 3
+- `payment_recovered` on day 2 stops the remaining steps, zero messages sent
+- an approval that never comes times out instead of holding money hostage
+- identical inputs produce identical decisions
+
+The tests need no server. To drive the real thing:
+
+```bash
+temporal server start-dev
+```
+
+```bash
+python -m recoup.workflows.worker
+```
 
 ## Learning, and a result I am not going to dress up
 

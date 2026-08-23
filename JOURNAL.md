@@ -385,9 +385,48 @@ was right, and the root cause *was* right. Only rendering it for a human exposed
 the justification was fiction. That is the second time today that showing a decision
 to a person caught something every aggregate and assertion had missed.
 
+### Durable multi-day workflows
+
+A recovery sequence is a plan that unfolds over days, and an in-process scheduler
+gets that wrong expensively: the plan lives in memory, so a restart either loses the
+sequence (money quietly abandoned) or replays it from the top (the customer gets the
+same message twice). Temporal makes the sequence itself durable.
+
+Two bugs, one satisfying payoff.
+
+**The sandbox rejected the workflow before a single one ran.** Temporal sandboxes
+workflow code and blocks imports that could introduce non-determinism. Importing my
+workflow module drags in the parent package, whose `__init__` reaches the Razorpay
+client and therefore httpx and urllib. The fix is a passthrough for `recoup`, and it
+is the right answer rather than a workaround: what the sandbox protects against, this
+design already prevents by construction.
+
+**`wait_condition` raises on timeout rather than returning.** I used it as "sleep,
+but wake early if a signal arrives" — and for a scheduled wait the timeout elapsing
+is the *normal* case, not the exceptional one. Nine tests failed with an opaque
+`WorkflowFailureError` until I dug out the underlying `TimeoutError`. Wrapped it in
+`_sleep_or_until`, which returns True/False instead of raising, because the
+inversion is confusing enough that it deserves a name.
+
+**The payoff.** Temporal replays workflow code from history, so it must be a pure
+function of its inputs — no clocks, no randomness, no I/O. Every gate in this system
+already takes `now` as an explicit parameter rather than calling `datetime.now()`
+internally. I did that on day one for testability. It turns out to be exactly what
+makes the gates **replay-safe by construction**: had they read the clock themselves,
+every gate decision would silently change on replay and the audit trail would
+disagree with itself. That is the single luckiest consequence of a decision made for
+an unrelated reason so far.
+
+**Time-skipping is what makes any of this testable.** Temporal's test environment
+fast-forwards its clock whenever every workflow is asleep, so a seven-day sequence
+runs in milliseconds. The claim I have been making since day one — gates are
+re-evaluated at every wake, never carried forward — now has a test that revokes
+consent on day 2 and asserts the nudge scheduled for day 3 does not fire. Before
+this it was a design assertion. Now it is a fact with a test behind it.
+
 ### Tomorrow
 
-Propensity model and the bandit.
+LLM message localisation (Hindi/Hinglish), then the chaos day.
 
 ### Open / not yet done
 

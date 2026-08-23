@@ -24,6 +24,11 @@ llm = [
     # unsure -- so the system behaves identically, just with more ops tickets.
     "anthropic>=0.40",
 ]
+workflows = [
+    # Durable multi-day recovery sequences. Optional: without it the engine still
+    # handles single decisions, it just cannot follow one across days.
+    "temporalio>=1.8",
+]
 console = [
     # Ops console API. Optional: the engine, gates, ledger and CLI demo all run
     # without it -- it exists so a human can drain the approval and rule queues.
@@ -35,6 +40,7 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.6",
     "mypy>=1.11",
+    "pytest-asyncio>=0.24",
 ]
 
 [build-system]
@@ -59,9 +65,13 @@ files = ["src", "tests"]
 [[tool.mypy.overrides]]
 # The SDK is an optional extra and is imported lazily inside ClaudeEscalator, so
 # type checking must pass with or without it installed.
-module = ["anthropic", "anthropic.*", "sklearn.*"]
+module = ["anthropic", "anthropic.*", "sklearn.*", "temporalio.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
+asyncio_mode = "auto"
+markers = [
+    "workflow: needs Temporal's time-skipping test server (downloads a binary on first run)",
+]
