@@ -314,3 +314,39 @@ def test_default_registry_covers_every_contact_action() -> None:
     ):
         for language in ("en", "hi", "hinglish"):
             assert registry.find(action, language, Channel.WHATSAPP) is not None
+
+
+# --- the shipped taxonomy is a curated artefact -----------------------------
+
+
+def test_shipped_taxonomy_contains_no_runtime_promotions() -> None:
+    """The tracked taxonomy is sourced from Razorpay's published error list. Rows with
+    error_class 'escalated' got there by a runtime promotion -- someone approving a
+    tier-2 proposal through the console -- and must never be committed.
+
+    This exists because it happened. Driving the console demo in a browser approved
+    two stub-authored rules straight into the tracked file, and they were committed
+    twice before anyone noticed. The only signal was a line-ending warning in the
+    commit output, which is not a signal anyone reads.
+    """
+    from recoup.diagnosis.taxonomy import TAXONOMY_PATH
+
+    rows = [
+        line
+        for line in TAXONOMY_PATH.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    promoted = [r.split("\t")[0] for r in rows if "\tescalated\t" in r]
+    assert not promoted, (
+        f"runtime-promoted rules were committed to the shipped taxonomy: {promoted}. "
+        "Approving rules in the console writes to the real file -- revert it before "
+        "committing."
+    )
+
+
+def test_shipped_taxonomy_is_the_expected_size() -> None:
+    """A blunt guard against the file drifting in either direction unnoticed."""
+    from recoup.diagnosis.taxonomy import load_taxonomy
+
+    load_taxonomy.cache_clear()
+    assert len(load_taxonomy()) == 110

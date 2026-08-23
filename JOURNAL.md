@@ -545,6 +545,37 @@ would have been a worse artefact than 7/8 with the eighth honestly described.
 Every fault is now also a pytest regression, so a future change that reintroduces
 double-charging under a timeout fails the build rather than a script nobody ran.
 
+### Two stub-written rows in the shipped taxonomy
+
+Doing a QA pass before making the repo public, I noticed the console was showing 1
+pending rule where it had shown 3. Rather than shrug at a number moving in the right
+direction, I checked why — and two of the four codes the demo injects as "unknown"
+were now resolving in **tier 1**.
+
+They were in the tracked taxonomy file. `issuer_host_unreachable` and
+`merchant_kyc_pending`, both with error_class `escalated`, both written by the
+substring-matching stub, both committed — across two separate commits.
+
+I reproduced hard before blaming anything: console tests in isolation, clean. Full
+suite, clean. The sandbox fixture works. **The tests were innocent.** It was me —
+driving the console UI in the browser to verify the rule-promotion loop actually
+writes to the real tracked file, which is exactly what it is supposed to do. I
+reverted the first one I approved and never noticed the others.
+
+The signal was there and I read past it twice. Every commit printed
+`LF will be replaced by CRLF in the working copy of 'data/error_taxonomy.tsv'` —
+which means the taxonomy was in the commit. Line-ending warnings are noise you learn
+to skim, which is precisely why something real hid in them.
+
+The actual defect is not the two rows, it is that a curated data artefact could be
+mutated by live code and committed with nothing checking. Two guards now: the shipped
+taxonomy must contain no `escalated` rows at all, and it must be exactly 110 entries.
+Verified they bite by appending a fake row and watching the test fail.
+
+Worth noting the shape: this is the third time in this project that a number moving
+slightly was the only visible trace of something real. Aggregates hide state-machine
+bugs; a rendered decision found one; a rule count found this one.
+
 ### Tomorrow
 
 Live integration once credentials exist, then the video.
