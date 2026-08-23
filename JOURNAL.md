@@ -166,12 +166,76 @@ aggregate number I had — gross, incremental, lift, CI all looked completely he
 read. Aggregates hide state-machine bugs by construction. Two regression tests now
 pin it.
 
+### Razorpay integration — webhooks and client
+
+Webhook verification is the trust boundary: everything downstream treats webhook
+contents as fact, so getting past it means an attacker can make Recoup believe an
+invoice was paid, or fabricate failures to drive messages at arbitrary phone
+numbers. Wrote the tests as attacks rather than happy-path coverage.
+
+Four rules, all routinely got wrong. Verify against the **raw body**, never
+re-serialised JSON (`json.loads` → `json.dumps` doesn't round-trip byte-for-byte —
+the API takes `bytes` not `str` so a caller can't hand over a re-encoded body by
+accident, and there's a test pinning that round-tripped bodies *fail* so nobody
+"fixes" it by loosening the check). Constant-time compare. Reject stale events —
+a valid signature stays valid forever, so without a freshness window a captured
+`payment.failed` is a reusable weapon. Reject duplicate event ids, separately,
+because Razorpay retries on non-2xx and at-least-once delivery is normal operation
+rather than an attack.
+
+Signature is checked before the body is parsed as JSON. Parsing untrusted bytes
+before authenticating them hands an attacker your JSON parser.
+
+### The constraint that shaped the client
+
+Went looking for Razorpay's idempotency semantics rather than assuming them, and
+the answer changes the design: `X-Payout-Idempotency` covers **only** Create Payout
+and the Composite APIs, plus the idempotent Refund and Route variants. Orders,
+Payment Links and Subscription charges have **no server-side idempotency at all**.
+
+So a retried POST creates a second order or a second payment link. In a recovery
+system that is a double charge against someone who already paid.
+
+That forces the interesting design decision: **a timeout is not a failure, it is an
+unknown.** The request may have been processed and the response lost coming back.
+Blind-retrying causes duplicate charges; treating it as failure loses money
+silently. Both are wrong, so mutating calls that end ambiguously raise
+`UncertainOutcome` and the caller *must* reconcile by looking the entity up by a
+receipt chosen in advance. That is why `receipt` is a required argument rather than
+optional — choosing it after the timeout is too late.
+
+Corollary: 5xx and 429 *are* retried on POST (Razorpay is telling us it never
+processed the request, so a retry cannot duplicate), but 408 is not, because a
+gateway timeout carries the same ambiguity as a client-side one.
+
+Also: payment links are created with Razorpay's own SMS/email notifications
+**disabled**. Letting the payment processor send its own message would route
+straight around consent, DND, quiet hours and the contact budget. If a message goes
+out it goes through the gated path or it does not go out.
+
+### A one-line bug that would have double-charged customers
+
+The shared-idempotency-store test failed: two clients sharing a store still made
+two API calls. Cause:
+
+```python
+self.idempotency = idempotency or IdempotencyStore()
+```
+
+`IdempotencyStore` defines `__len__`, so an **empty store is falsy** and the
+caller's store was silently replaced by a fresh one. The scenario this breaks is
+exactly the one it exists for: a workflow resuming on another worker passes in a
+store that is empty of everything except the key that must not fire twice.
+
+`X or Y()` is idiomatic enough that I wrote it without thinking. It is only safe
+when `X` cannot be falsy, and any object defining `__len__` or `__bool__` can be.
+Grepped the rest of the codebase for the same pattern — `ReplayGuard` also defines
+`__len__` but is never used that way. Fixed to an explicit `is None` check.
+
 ### Tomorrow
 
-Razorpay test-mode integration (orders, payment links, subscriptions, webhooks) for
-the execution path. The simulator stays for the measurement path — test mode can
-produce a failure but it cannot give you the counterfactual, and those are two
-different questions.
+Wire the Razorpay execution path into the policy engine end to end, and stand up
+tier-2 LLM escalation for unmapped error codes. Both need credentials in `.env`.
 
 ### Open / not yet done
 

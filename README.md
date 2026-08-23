@@ -179,11 +179,35 @@ by construction.
 ## Status
 
 Day 1 of 13. Built: failure taxonomy (110 reasons), compliance gate layer (9 gates),
-ground-truth simulator, measurement harness, hash-chained audit ledger with replay.
-61 tests, ruff clean, mypy --strict clean.
+ground-truth simulator, measurement harness, hash-chained audit ledger with replay,
+Razorpay webhook verification and test-mode API client.
+**109 tests, ruff clean, mypy --strict clean.**
 
-Not yet built: LLM escalation tier, propensity model, bandit, Razorpay test-mode
-execution path, durable workflows, ops console, approval-queue reviewer.
+Not yet built: LLM escalation tier, propensity model, bandit, end-to-end execution
+wiring, durable workflows, ops console, approval-queue reviewer.
+
+## Handling money safely
+
+Razorpay provides **no server-side idempotency** on the endpoints a recovery
+workflow uses — `X-Payout-Idempotency` covers only Payouts, Composite APIs, and the
+idempotent Refund/Route variants. Orders, Payment Links and Subscription charges
+have none, so a retried POST creates a *second* order. In a recovery system that is
+a double charge against someone who already paid.
+
+Consequently:
+
+- **A timeout is an unknown, not a failure.** Mutating calls that end ambiguously
+  raise `UncertainOutcome`; the caller must reconcile by looking the entity up via a
+  receipt chosen *before* the call. Blind retry double-charges; assuming failure
+  loses money silently. `receipt` is therefore required, not optional.
+- **5xx and 429 are retried on POST** (Razorpay is telling us it never processed the
+  request). **408 is not** — a gateway timeout carries the same ambiguity as a
+  client-side one.
+- **Live keys are refused** unless `allow_live=True`. This project has no business
+  being one environment variable away from moving real money.
+- **Razorpay's own SMS/email on payment links is disabled.** Letting the processor
+  notify the customer would route around consent, DND, quiet hours and the contact
+  budget. Contact goes through the gated path or not at all.
 
 ## What this deliberately does not do
 
