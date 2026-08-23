@@ -148,8 +148,14 @@ def test_expired_card_asks_for_a_different_instrument() -> None:
     assert handled.intent.action is ActionKind.NUDGE_WITH_INSTRUMENT_SWITCH
     assert handled.result.status is ExecutionStatus.DONE
     assert len(notifier.sent) == 1
-    assert "different method" in notifier.sent[0]["body"]
+    # Asserting on meaning rather than phrasing: template copy is now a reviewed,
+    # registered artefact and its exact words will change without this behaviour
+    # changing. What must hold is that the message carries a usable link and does
+    # not tell them to retry the method that cannot work.
+    body = notifier.sent[0]["body"]
     assert notifier.sent[0]["link"] == "https://rzp.io/i/abc123"
+    assert "https://rzp.io/i/abc123" in body
+    assert "try again" not in body.lower()
     assert stub.posts_to("orders") == [], "must not create an order it cannot charge"
 
 

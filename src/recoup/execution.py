@@ -32,6 +32,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from recoup.domain import ActionKind, AtRiskEvent, Channel, Customer
+from recoup.messaging.templates import TemplateError, TemplateRegistry
 from recoup.razorpay.client import (
     ApiError,
     RazorpayClient,
@@ -135,24 +136,31 @@ class WorkQueue:
         return sum(int(i["amount_paise"]) for i in self.items)
 
 
-# Copy is intentionally plain and free of urgency or threat. A recovery message
-# that manufactures pressure is both worse-performing and, under RBI conduct rules,
-# a liability. Tier 3 (an LLM) will localise these into Hindi/Hinglish; the English
-# skeletons stay here so the non-LLM path is always functional.
-TEMPLATES: dict[ActionKind, str] = {
-    ActionKind.NUDGE: (
-        "Your payment of {amount} did not go through. "
-        "You can complete it here whenever convenient: {link}"
-    ),
-    ActionKind.NUDGE_WITH_INSTRUMENT_SWITCH: (
-        "Your payment of {amount} could not be completed with the saved payment method. "
-        "You can pay using a different method here: {link}"
-    ),
-    ActionKind.NUDGE_WITH_INCENTIVE: (
-        "Your payment of {amount} did not go through. "
-        "Complete it here and we will apply a {discount} discount: {link}"
-    ),
-}
+def default_registry() -> TemplateRegistry:
+    """The hand-written baseline templates, pre-approved for local use.
+
+    In production these ids are the DLT/Meta registration ids and approval happens
+    through the console after a real submission. Here they are marked approved with a
+    local id so the system is functional out of the box -- but the code path is the
+    same one a registered template travels, so nothing behaves differently later.
+    """
+    from recoup.messaging.authoring import StubAuthor
+
+    registry = TemplateRegistry()
+    author = StubAuthor()
+    for action in (
+        ActionKind.NUDGE,
+        ActionKind.NUDGE_WITH_INSTRUMENT_SWITCH,
+        ActionKind.NUDGE_WITH_INCENTIVE,
+    ):
+        for language in ("en", "hi", "hinglish"):
+            for channel in (Channel.SMS, Channel.WHATSAPP, Channel.EMAIL):
+                template = author.author(action, language, channel)
+                if template is None:
+                    continue
+                registry.add(template)
+                registry.approve(template.template_id, f"local-{template.template_id}")
+    return registry
 
 
 class Executor:
@@ -165,6 +173,7 @@ class Executor:
         *,
         ops_queue: WorkQueue | None = None,
         approval_queue: WorkQueue | None = None,
+        templates: TemplateRegistry | None = None,
     ) -> None:
         self.client = client
         self.notifier: Notifier = notifier if notifier is not None else RecordingNotifier()
@@ -175,6 +184,11 @@ class Executor:
         self.approval_queue = (
             approval_queue if approval_queue is not None else WorkQueue("approval")
         )
+        # Only APPROVED templates are sendable, so an empty registry means no
+        # contact goes out at all. That is the correct failure: an unregistered
+        # message is rejected by the operator anyway, and this way it fails here
+        # where it is visible instead of vanishing in the network.
+        self.templates = templates if templates is not None else default_registry()
 
     def execute(
         self,
@@ -268,12 +282,33 @@ class Executor:
             )
 
         short_url = str(link.get("short_url", ""))
-        template = TEMPLATES.get(action, TEMPLATES[ActionKind.NUDGE])
-        body = template.format(
-            amount=f"Rs.{event.amount_paise / 100:,.2f}",
-            link=short_url,
-            discount=f"{discount_bps / 100:.0f}%",
-        )
+        template = self.templates.find(action, customer.language, customer.preferred_channel)
+        if template is None:
+            # No registered template for this action in any language we can fall back
+            # to. Sending anyway would produce a message the operator rejects, so the
+            # link stands and a human is told what is missing.
+            return ExecutionResult(
+                ExecutionStatus.UNRESOLVED,
+                action,
+                f"no approved template for {action}/{customer.language}; link raised, nothing sent",
+                {"payment_link_id": str(link.get("id", "")), "short_url": short_url},
+            )
+
+        values = {"amount": f"Rs.{event.amount_paise / 100:,.2f}", "link": short_url}
+        if any(v.name == "discount" for v in template.variables):
+            values["discount"] = f"{discount_bps / 100:.0f}%"
+        try:
+            body = template.render(values)
+        except TemplateError as exc:
+            # A template that cannot render is one the operator would reject. Fail
+            # here, visibly, rather than sending something that silently never lands.
+            return ExecutionResult(
+                ExecutionStatus.UNRESOLVED,
+                action,
+                f"template {template.template_id} would not render, nothing sent: {exc}",
+                {"payment_link_id": str(link.get("id", "")), "short_url": short_url},
+            )
+
         message_id = self.notifier.send(
             customer=customer,
             channel=customer.preferred_channel,

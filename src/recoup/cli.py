@@ -98,7 +98,22 @@ def build_client() -> tuple[RazorpayClient, str]:
     )
 
 
+def _use_utf8_stdout() -> None:
+    """Windows consoles default to cp1252, which cannot encode Devanagari.
+
+    The demo prints Hindi templates, so without this it dies with a
+    UnicodeEncodeError on the machine most likely to be running it. Reconfiguring is
+    better than stripping the characters -- a message we cannot print is one we
+    should not be sending either.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def demo(n_events: int = 300, holdout_rate: float = 0.20) -> int:
+    _use_utf8_stdout()
     client, mode = build_client()
     notifier = RecordingNotifier()
     ledger = Ledger()

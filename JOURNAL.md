@@ -424,9 +424,57 @@ re-evaluated at every wake, never carried forward — now has a test that revoke
 consent on day 2 and asserts the nudge scheduled for day 3 does not fire. Before
 this it was a design assertion. Now it is a fact with a test behind it.
 
+### Message localisation, and a constraint that inverted the whole feature
+
+I was about to build the obvious thing: an LLM generating Hindi and Hinglish copy at
+send time. Checked the Indian regulations first rather than after, and the answer
+changed the design completely.
+
+Under TRAI's TCCCPR 2018 and the DLT framework, every commercial SMS must match a
+**pre-registered content template exactly** — punctuation, spacing and variable
+positions included — or the operator's scrubbing engine drops it before it reaches a
+handset. Registration takes 3–7 days. Since January 2026 every variable must carry a
+declared data type. WhatsApp is the same shape: business-initiated messages outside
+the 24-hour service window need a Meta-approved template.
+
+A recovery nudge is business-initiated and outside any service window by definition.
+So freeform generated text is not a *compliance risk* here — it is an
+**undeliverable message**. Dropped upstream of us, silently, with the money still
+unrecovered and nothing in our metrics to show it. I would have shipped a feature
+that appeared to work in every test and delivered zero messages in production.
+
+So the model does not write messages. It **authors candidate templates**, a human
+reviews and registers them, and the send path fills approved templates
+deterministically with no model involved. Which is the same shape as the tier-2
+rule-mining loop: propose once, approve once, run deterministically forever. Three
+places in this project now have that structure, and I did not plan it — it seems to
+be what "use a model responsibly in a regulated path" converges on.
+
+Validation is where the real work went, and none of it is stylistic:
+
+- a literal rupee amount in a template is rejected (wrong for every other amount, and
+  unfixable without another registration cycle)
+- length is checked against **worst-case** variable values, not typical ones — a
+  template that fits at ₹99 and splits into billed segments at ₹10,00,000 fails in
+  production months after approval
+- coercive language is rejected, because a model asked for urgency reaches for "final
+  warning" and "legal action" by default
+- rendered messages are reconstructed back into their template locally — the same
+  check the DLT scrubbing engine performs, run in milliseconds rather than surfacing
+  as silent non-delivery days later
+
+Bad proposals are reported, never corrected. Patching a hardcoded amount would hide
+that the prompt needs work and would mean the reviewer approves text nobody wrote.
+
+Also fixed a Windows bug the feature exposed: the demo prints Hindi templates, and
+Windows consoles default to cp1252, which cannot encode Devanagari. It crashed with a
+UnicodeEncodeError on the machine most likely to be running the demo. Reconfiguring
+stdout is better than stripping the characters — a message we cannot print is one we
+should not be sending either.
+
 ### Tomorrow
 
-LLM message localisation (Hindi/Hinglish), then the chaos day.
+The chaos day: deliberately break things and prove they degrade gracefully.
 
 ### Open / not yet done
 

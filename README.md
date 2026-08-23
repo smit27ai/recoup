@@ -229,7 +229,63 @@ tier 2) -> policy -> gates -> Razorpay -> ledger, with uncertain-outcome
 reconciliation and a verifiable audit trail. **179 tests, ruff clean, mypy --strict
 clean.**
 
-Not yet built: LLM message localisation.
+Everything in the architecture above is built and tested.
+
+## Message localisation, and why no model runs in the send path
+
+The obvious build for this is to generate Hindi and Hinglish copy at send time. In
+India that produces messages that are **never delivered**.
+
+Under TRAI's TCCCPR 2018 and the DLT framework, every commercial SMS must match a
+pre-registered content template **exactly** -- punctuation, spacing and variable
+positions included -- or the operator's scrubbing engine drops it before it reaches a
+handset. Registration takes 3-7 days, and since January 2026 each variable must carry
+a declared data type. WhatsApp is the same shape: business-initiated messages outside
+the 24-hour service window require a Meta-approved template.
+
+A recovery nudge is business-initiated and outside any service window by definition.
+So freeform generated text here is not a compliance risk, it is an **undeliverable
+message** -- dropped upstream of us, silently, money still unrecovered.
+
+That inverts where the model belongs. It does not write messages. It **authors
+candidate templates**, a human reviews and submits them for registration, and the
+send path fills approved templates deterministically with no model involved. Exactly
+the shape of the tier-2 rule-mining loop: propose once, approve once, run
+deterministically forever.
+
+```
+Aapka {amount} ka payment complete nahi hua. Yahan pura karein: {link}
+आपका {amount} का भुगतान पूरा नहीं हुआ। यहाँ पूरा करें: {link}
+Your payment of {amount} did not go through. Complete it here: {link}
+```
+
+Hinglish is deliberately **not** "Hindi in Devanagari with English words". It is
+Latin script, English for payment nouns (payment, link, card, UPI) because those are
+the words in the app, Hindi for the connective tissue. A test asserts the Hinglish
+template contains no Devanagari, because a mistranslated payment message reads as a
+scam.
+
+### Validation is not stylistic
+
+Every rule encodes something that otherwise fails days later at an operator, or
+reaches a real person as coercion:
+
+- **A literal rupee amount is rejected.** The single most likely model mistake -- a
+  template baked to one amount is wrong for every other amount, and unfixable without
+  another 3-7 day registration cycle.
+- **Worst-case length, not typical length.** A template that fits at ₹99 and splits
+  into billed SMS segments at ₹10,00,000 fails in production months after approval.
+- **Coercive language is rejected** -- no legal action, penalties, "final warning". A
+  model asked for urgency reaches for exactly these by default.
+- **Every problem is reported at once**, because a reviewer waiting days per round
+  trip should not discover faults one at a time.
+- **A rendered message is reconstructed back into its template** locally -- the same
+  check the DLT scrubbing engine performs, run in milliseconds instead of surfacing
+  as silent non-delivery.
+
+Bad proposals are **reported, never corrected**. Quietly patching a hardcoded amount
+would hide that the prompt needs work, and would mean the reviewer approves text
+nobody wrote.
 
 ## Durable multi-day workflows
 
