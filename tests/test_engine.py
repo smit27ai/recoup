@@ -434,3 +434,93 @@ def test_explain_renders_the_whole_journey() -> None:
 def test_root_cause_drives_the_action(reason: str, expected: ActionKind) -> None:
     engine, _, _, _ = _engine()
     assert _run(engine, _event(reason)).intent.action is expected
+
+
+# --- tier 2 inside the pipeline ---------------------------------------------
+
+
+def _engine_with_escalation(backend=None):
+    from recoup.diagnosis.escalation import EscalationService, StubEscalator
+
+    stub = Stub()
+    client = RazorpayClient(
+        "rzp_test_key", "secret", transport=httpx.MockTransport(stub.handler), max_attempts=2
+    )
+    notifier = RecordingNotifier()
+    engine = RecoveryEngine(
+        Executor(client, notifier),
+        Ledger(),
+        holdout_rate=0.0,
+        escalation=EscalationService(backend if backend is not None else StubEscalator()),
+    )
+    return engine, stub, notifier
+
+
+def test_without_tier_two_an_unknown_code_goes_to_a_human() -> None:
+    engine, _, notifier, _ = _engine()
+    handled = _run(engine, _event("brand_new_code_2027"))
+    assert handled.intent.diagnosis is None
+    assert handled.executed is ActionKind.ROUTE_TO_OPS
+    assert notifier.sent == []
+
+
+def test_tier_two_recovers_an_unknown_code_without_contacting_anyone() -> None:
+    """The stub can classify 'balance' language, but its confidence is deliberately
+    below the bar to authorise contact -- so we get a silent retry, not a message."""
+    engine, _, notifier = _engine_with_escalation()
+    handled = _run(engine, _event("account_balance_insufficient_2027"))
+
+    assert handled.intent.diagnosis is not None
+    assert handled.intent.diagnosis.tier == 2
+    assert handled.intent.diagnosis.root_cause == "FUNDS"
+    assert not handled.executed.is_contact, "tier 2 must not unlock contact by itself"
+    assert notifier.sent == []
+
+
+def test_tier_two_routes_merchant_bugs_away_from_the_customer() -> None:
+    engine, stub, notifier = _engine_with_escalation()
+    handled = _run(engine, _event("merchant_account_not_enabled_yet"))
+    assert handled.executed is ActionKind.ROUTE_TO_OPS
+    assert notifier.sent == []
+    assert stub.posts_to("payment_links") == []
+
+
+def test_tier_two_is_recorded_in_the_ledger_as_tier_two() -> None:
+    """A reviewer must be able to see which decisions leaned on a model."""
+    engine, _, _ = _engine_with_escalation()
+    handled = _run(engine, _event("account_balance_insufficient_2027"))
+    assert handled.record.diagnosis_tier == 2
+    assert "tier 2" in handled.explain()
+
+
+def test_tier_two_outage_does_not_break_the_pipeline() -> None:
+    """A model outage must degrade to an ops ticket, not an exception."""
+
+    class Broken:
+        name = "broken"
+
+        def propose(self, reason, context):
+            raise RuntimeError("API unreachable")
+
+    engine, _, notifier = _engine_with_escalation(Broken())
+    handled = _run(engine, _event("some_unknown_code"))
+    assert handled.executed is ActionKind.ROUTE_TO_OPS
+    assert notifier.sent == []
+
+
+def test_a_batch_of_the_same_unknown_code_costs_one_model_call() -> None:
+    from recoup.diagnosis.escalation import StubEscalator
+
+    class Counting(StubEscalator):
+        calls: int = 0
+
+        def propose(self, reason, context):
+            type(self).calls += 1
+            return super().propose(reason, context)
+
+    Counting.calls = 0
+    engine, _, _ = _engine_with_escalation(Counting())
+    for _ in range(200):
+        ev = _event("repeated_unknown_code")
+        engine.handle(ev, _customer(), *_states(), MIDDAY)
+    assert Counting.calls == 1

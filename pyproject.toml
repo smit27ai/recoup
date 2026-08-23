@@ -11,6 +11,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+llm = [
+    # Tier-2 escalation only. Deliberately optional: with it absent, an unmapped
+    # error code routes to a human, which is the same thing tier 2 does when it is
+    # unsure -- so the system behaves identically, just with more ops tickets.
+    "anthropic>=0.40",
+]
 dev = [
     "pytest>=8.3",
     "pytest-cov>=5.0",
@@ -36,6 +42,12 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 python_version = "3.12"
 strict = true
 files = ["src", "tests"]
+
+[[tool.mypy.overrides]]
+# The SDK is an optional extra and is imported lazily inside ClaudeEscalator, so
+# type checking must pass with or without it installed.
+module = ["anthropic", "anthropic.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

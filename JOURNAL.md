@@ -281,10 +281,61 @@ chase**, blocked by quiet hours (103), consent (29), DND (20) and fatigue (5) on
 that only reports what it recovered will drift toward messaging more, because the
 cost side never appears on the page.
 
+### Tier 2, and getting the safety policy wrong first
+
+Built model-backed diagnosis for codes tier 1 does not have. Wrote what I thought
+was the safety policy — one confidence threshold at 0.75, below which nothing
+happens — then wired it into the engine, and the integration test failed: an
+unmapped code that clearly meant "insufficient funds" produced *no diagnosis at
+all*, because the stub's 0.55 confidence sat under the bar.
+
+My first instinct was to lower the threshold. That would have been the wrong fix,
+and thinking about why exposed that the design was wrong rather than the number.
+
+A single scalar threshold treats all consequences as equally risky. They are not:
+
+| consequence | customer impact | cost of being wrong |
+|---|---|---|
+| route to ops | none | an ops ticket nobody needed |
+| silent retry | near-zero | one wasted API call |
+| contact a customer | high, irreversible | we dun a real person over our own bug |
+
+One threshold got *both* ends wrong simultaneously. It blocked harmless retries on
+mediocre-confidence codes, losing recoverable money for no safety benefit — and it
+still leaned on confidence for the one decision where confidence is not admissible
+evidence, because a model can be confidently wrong and its self-assessment is
+exactly the thing you cannot verify at 3am.
+
+The rewritten policy: **tier 2 may route and may retry; it may never authorise
+contact, at any confidence including 0.99.** The gate on contact is a human
+approving the mined rule, at which point the code becomes tier 1 and contact unlocks
+through the ordinary path having been seen by a person. Confidence now only decides
+whether a silent retry is worth one API call, and the floor for that is 0.5 — low on
+purpose.
+
+There is a parametrised test sweeping the entire confidence range asserting that no
+value whatsoever produces a contactable tier-2 diagnosis, so nobody can reintroduce
+a threshold there without it failing loudly.
+
+**Every escalation mines a rule.** Each answer is also a candidate row for
+`error_taxonomy.tsv`, ranked by how often the code was seen so a reviewer fixes the
+most expensive one first. Approving one promotes the code to tier 1 forever: free,
+instant, deterministic, auditable. The model's job is to shrink its own job — a
+system that calls a model for the same unknown code on the hundred-thousandth
+occurrence has not learned anything.
+
+**Caching is a consistency argument before it is a cost argument.** One unknown code
+costs one call regardless of how many events carry it. Two identical failures must
+never receive different diagnoses because the sampler went a different way. Failures
+are cached too, so a model outage gets asked once, not once per event.
+
+Tier 2 is an enhancement, never a dependency: any backend failure degrades to "route
+to a human", which is exactly what happens with no tier 2 configured at all.
+
 ### Tomorrow
 
-Tier-2 LLM escalation for unmapped error codes, and the propensity model. Both need
-credentials.
+Propensity model and the bandit. Then the ops console (Node is installed now), which
+is what makes the approval queue and the review queue actually drainable.
 
 ### Open / not yet done
 

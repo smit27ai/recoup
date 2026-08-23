@@ -59,7 +59,7 @@ is worth more than any amount of retry budget.
 | Component | Tool | Why |
 |---|---|---|
 | Root cause from error code | **Lookup table**, 110 reasons | Deterministic, auditable, 0ms, free |
-| Unmapped / new codes | LLM escalation *(day 4)* | Genuine ambiguity — and it proposes a table row for human review |
+| Unmapped / new codes | `claude-opus-5`, strict tool schema | Genuine ambiguity — and it proposes a table row for human review |
 | Recovery propensity | **Gradient boosting** *(day 5)* | The answer is a number, not prose |
 | Intervention choice | **Contextual bandit** *(day 6)* | Explore/exploit is arithmetic |
 | Compliance gates | **Pure predicates** | Must be provable. Never probabilistic |
@@ -224,12 +224,59 @@ by construction.
 
 ## Status
 
-Day 1 of 13. The execution path runs end to end: webhook -> diagnose -> policy ->
-gates -> Razorpay -> ledger, with uncertain-outcome reconciliation and a verifiable
-audit trail. **141 tests, ruff clean, mypy --strict clean.**
+Day 1 of 13. The execution path runs end to end: webhook -> diagnose (tier 1, then
+tier 2) -> policy -> gates -> Razorpay -> ledger, with uncertain-outcome
+reconciliation and a verifiable audit trail. **179 tests, ruff clean, mypy --strict
+clean.**
 
-Not yet built: LLM escalation tier, propensity model, bandit, durable multi-day
-workflows, ops console, approval-queue reviewer.
+Not yet built: propensity model, bandit, durable multi-day workflows, ops console,
+approval-queue reviewer.
+
+## Tier 2: where a model earns its place
+
+Tier 1 resolves ~110 documented error reasons by table lookup. Tier 2 exists only
+for what tier 1 returns `None` on — a code Razorpay adds after we ship. That is a
+genuinely ambiguous language problem, which is what a model is good at, unlike
+looking things up in a table, which it is bad at.
+
+**Trust is graded by blast radius, not by the model's confidence.**
+
+| consequence | customer impact | authority required |
+|---|---|---|
+| route to ops | none | any confidence — being wrong costs an ops ticket |
+| silent retry | near-zero | enough to be worth one API call (0.5) |
+| **contact a customer** | high, irreversible | **human review. No confidence value suffices.** |
+
+Tier 2 may route and may retry. It may **never** authorise contacting a customer —
+not at 0.99, not ever. The gate on contact is a human approving the mined rule,
+because a model can be confidently wrong and its confidence is precisely the thing
+you cannot check at 3am. A parametrised test sweeps the whole confidence range to
+make sure nobody reintroduces a threshold there.
+
+```
+unmapped code               tier1   tier2 root cause        retry?  contact?
+----------------------------------------------------------------------------
+card_has_expired_2027       MISS    INSTRUMENT_INVALID      no      no
+acct_balance_shortfall      MISS    FUNDS                   yes     no
+merchant_kyc_pending        MISS    MERCHANT_CONFIG         no      no
+issuer_host_unreachable     MISS    ISSUER_DOWN             yes     no
+zx_qq_9917                  MISS    UNKNOWN                 no      no
+```
+
+**Every escalation mines a rule.** Each answer is also a candidate row for
+`error_taxonomy.tsv`, ranked by how often the code was seen. Approve one and that
+code is tier 1 forever after — free, instant, deterministic, and now permitted to
+drive contact through the ordinary path. The model's job is to shrink its own job.
+
+**One unknown code costs one call, not N.** Cached by reason. That is a consistency
+argument before it is a cost argument: two identical failures must never get
+different diagnoses because the sampler went a different way. Failures are cached
+too, so a model outage is asked once rather than once per event.
+
+**Tier 2 is an enhancement, never a dependency.** If the API is down, rate-limited,
+or returns nonsense, the code routes to a human — exactly what happens with no tier
+2 configured at all. Without `ANTHROPIC_API_KEY` a deterministic offline stub takes
+over, and the `anthropic` SDK is an optional extra (`pip install -e ".[llm]"`).
 
 ### How the layers are separated
 

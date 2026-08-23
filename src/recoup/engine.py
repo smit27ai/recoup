@@ -34,6 +34,7 @@ import random
 from dataclasses import dataclass
 from datetime import datetime
 
+from recoup.diagnosis.escalation import EscalationService
 from recoup.diagnosis.taxonomy import Diagnosis, diagnose
 from recoup.domain import ActionKind, Arm, AtRiskEvent, Customer
 from recoup.execution import ExecutionResult, ExecutionStatus, Executor
@@ -99,8 +100,13 @@ class RecoveryEngine:
         config: PolicyConfig | None = None,
         holdout_rate: float = 0.20,
         seed: int = 20260905,
+        escalation: EscalationService | None = None,
     ) -> None:
         self.executor = executor
+        # Tier 2 is optional by design. With it absent, an unmapped code routes to a
+        # human, which is the same thing tier 2 does when it is unsure -- so the
+        # system behaves identically, just with more ops tickets.
+        self.escalation = escalation
         # Explicit None checks throughout: Ledger defines __len__, so `or` would
         # silently swap out a caller's empty ledger. See client.IdempotencyStore.
         self.ledger = ledger if ledger is not None else Ledger()
@@ -114,6 +120,18 @@ class RecoveryEngine:
     def decide(self, event: AtRiskEvent, customer: Customer) -> Intent:
         """Diagnose and choose. Touches nothing and authorises nothing."""
         diagnosis = diagnose(event.error_reason)
+        if diagnosis is None and self.escalation is not None and event.error_reason:
+            # Tier 1 did not recognise the code. Escalate rather than guess -- and
+            # note tier 2 may still return None, which routes to a human.
+            diagnosis = self.escalation.diagnose(
+                event.error_reason,
+                {
+                    "method": event.method,
+                    "amount_paise": event.amount_paise,
+                    "risk_kind": str(event.kind),
+                    "attempt_number": event.attempt_number,
+                },
+            )
         action = self.strategy(event, diagnosis, customer)
         arm = Arm.HOLDOUT if self._rng.random() < self.holdout_rate else Arm.TREATMENT
         return Intent(event=event, diagnosis=diagnosis, action=action, arm=arm)
