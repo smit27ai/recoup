@@ -232,10 +232,59 @@ when `X` cannot be falsy, and any object defining `__len__` or `__bool__` can be
 Grepped the rest of the codebase for the same pattern — `ReplayGuard` also defines
 `__len__` but is never used that way. Fixed to an explicit `is None` check.
 
+### Wiring the execution path end to end
+
+`engine.py` carries one at-risk rupee through every stage and emits one ledger
+record explaining the journey. The structure that mattered was splitting decision
+from authorisation:
+
+- `decide()` is pure and authorises **nothing** — diagnosis plus policy, no clock.
+- `authorise()` runs all nine gates against the clock **at the moment of action**.
+- `execute()` is the only code permitted a side effect, and it never re-decides.
+
+Splitting those two is what makes the multi-day case correct instead of
+accidentally correct for same-second execution. A workflow that slept four days may
+have been planned inside quiet hours and woken outside them; the customer may have
+revoked consent, opened a dispute or promised to pay while it slept. Gate results
+computed at plan time and executed later is the standard way a compliant system
+emits non-compliant messages.
+
+Two more decisions worth recording:
+
+**The holdout is enforced at the top of the pipeline, not inside policy.** A control
+event still runs through diagnosis and policy so the intent is recorded, then is
+forced to `NO_ACTION`. The ledger therefore shows what we *would* have done, which
+is what makes the counterfactual interpretable rather than a hole in the data. The
+demo output shows a holdout event where every gate returned `allow` — the holdout is
+what stopped it. "Compliance said no" and "this one is the control" are different
+reasons for doing nothing and must not look identical in the record.
+
+**Settlement appends rather than edits.** When a `payment.captured` webhook lands
+later, the outcome is a *new* record pointing at the old one's hash. Editing the
+original would break the chain — which is exactly the property that makes the chain
+worth having.
+
+**A message is never sent if the payment link outcome is unknown.** If the link
+POST times out we have nothing to put in the message, and telling somebody to pay
+without saying how is worse than silence. `UNRESOLVED`, no contact, human looks.
+
+### The demo
+
+`python -m recoup` runs the whole path with no configuration and no network — a
+stateful in-process double stands in for Razorpay, so the reconciliation path is
+demonstrable offline. With keys in the environment the same engine drives real test
+mode; only the transport changes.
+
+The number I did not expect to care about: **₹10,21,764 of value we chose not to
+chase**, blocked by quiet hours (103), consent (29), DND (20) and fatigue (5) on a
+300-event run. Compliance is a cost, and printing it is how it stays real. A system
+that only reports what it recovered will drift toward messaging more, because the
+cost side never appears on the page.
+
 ### Tomorrow
 
-Wire the Razorpay execution path into the policy engine end to end, and stand up
-tier-2 LLM escalation for unmapped error codes. Both need credentials in `.env`.
+Tier-2 LLM escalation for unmapped error codes, and the propensity model. Both need
+credentials.
 
 ### Open / not yet done
 

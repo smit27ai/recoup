@@ -139,6 +139,52 @@ if `test_aa_null` fails, no other number this project reports can be trusted.
 
 ## Running it
 
+One command, no configuration, no credentials, no network:
+
+```bash
+python -m recoup -n 300
+```
+
+It runs the full path -- diagnose, decide, gate, execute, record -- over 300
+synthetic at-risk events and prints what happened to every one of them, plus a
+handful of decisions in full. With `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` set it
+drives real test-mode Razorpay instead; same engine, same gates, same ledger, only
+the transport changes.
+
+```
+  WHY ACTIONS WERE BLOCKED
+  ------------------------------------------------------------------
+  quiet_hours                                     103
+  consent                                          29
+  dnd                                              20
+  fatigue                                           5
+
+  value we chose NOT to chase   Rs.     1,021,764
+  (compliance is a cost. Not measuring it is how it quietly stops being real.)
+
+  # held out, so we did nothing on purpose
+  [5] 2026-08-05T18:56:00+05:30  event=evt_000005 customer=cust_00080  Rs.197.00
+    saw       transaction_limit_exceeded -> LIMIT_EXCEEDED (tier 1)
+    wanted    nudge_with_instrument_switch
+      ok   quiet_hours          18:56 inside 08:00-19:00
+      ok   stopping_rule        attempt 2/4
+    did       no_action   [allow]
+    outcome   open   arm=holdout
+
+  INTEGRITY
+  ------------------------------------------------------------------
+  ledger              300 records, hash chain verified
+  messages sent       32
+  holdout contacted   0  (must be 0, or measurement is void)
+  approval queue      14 items, Rs.292,168
+```
+
+Note the holdout trace: every gate said **allow**. The holdout is what stopped it.
+Those are different reasons for doing nothing and the ledger distinguishes them,
+which is what makes the control arm interpretable rather than a hole in the data.
+
+Setup:
+
 ```bash
 python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"
 ```
@@ -178,13 +224,25 @@ by construction.
 
 ## Status
 
-Day 1 of 13. Built: failure taxonomy (110 reasons), compliance gate layer (9 gates),
-ground-truth simulator, measurement harness, hash-chained audit ledger with replay,
-Razorpay webhook verification and test-mode API client.
-**109 tests, ruff clean, mypy --strict clean.**
+Day 1 of 13. The execution path runs end to end: webhook -> diagnose -> policy ->
+gates -> Razorpay -> ledger, with uncertain-outcome reconciliation and a verifiable
+audit trail. **141 tests, ruff clean, mypy --strict clean.**
 
-Not yet built: LLM escalation tier, propensity model, bandit, end-to-end execution
-wiring, durable workflows, ops console, approval-queue reviewer.
+Not yet built: LLM escalation tier, propensity model, bandit, durable multi-day
+workflows, ops console, approval-queue reviewer.
+
+### How the layers are separated
+
+`decide()` is pure and authorises nothing. `authorise()` runs the gates against the
+clock **at the moment of action**, never cached from decision time -- a workflow
+that slept four days may have been planned inside quiet hours and woken outside
+them, or the customer may have revoked consent while it slept. `execute()` is the
+only code permitted a side effect, and it never re-decides: if a payment link
+cannot be raised, that is a failure to record, not licence to send an SMS instead.
+
+The holdout is enforced at the top of the pipeline rather than in policy, so a
+control-arm event still goes through diagnosis and policy and the ledger records
+what we *would* have done.
 
 ## Handling money safely
 
