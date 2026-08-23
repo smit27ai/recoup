@@ -20,3 +20,6 @@ artifacts/
 Screenshot*.png
 node_modules/
 console/dist/
+
+# personal submission draft (college, grad year, etc) - never goes public
+SUBMISSION.md
