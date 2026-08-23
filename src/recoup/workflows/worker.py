@@ -40,7 +40,11 @@ async def run(address: str = TEMPORAL_ADDRESS) -> None:
         client,
         task_queue=TASK_QUEUE,
         workflows=[RecoveryWorkflow],
-        activities=[activities.authorise_step, activities.execute_step],
+        activities=[
+            activities.authorise_step,
+            activities.execute_step,
+            activities.record_step,
+        ],
         workflow_runner=sandbox_runner(),
     ):
         await asyncio.Event().wait()

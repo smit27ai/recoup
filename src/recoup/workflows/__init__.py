@@ -3,6 +3,8 @@
 from recoup.workflows.backend import StateStore, WorkflowBackend
 from recoup.workflows.recovery import (
     TASK_QUEUE,
+    GateOutcome,
+    RecordRequest,
     RecoveryActivities,
     RecoveryOutcome,
     RecoveryRequest,
@@ -14,6 +16,8 @@ from recoup.workflows.recovery import (
 
 __all__ = [
     "TASK_QUEUE",
+    "GateOutcome",
+    "RecordRequest",
     "RecoveryActivities",
     "RecoveryOutcome",
     "RecoveryRequest",

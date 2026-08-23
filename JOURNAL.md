@@ -472,6 +472,40 @@ UnicodeEncodeError on the machine most likely to be running the demo. Reconfigur
 stdout is better than stripping the characters — a message we cannot print is one we
 should not be sending either.
 
+### The gap my own docstrings were lying about
+
+Asked whether the project was ready to submit, I went looking for weaknesses rather
+than reassurance, and found one that mattered: **the Temporal workflows never wrote
+to the ledger.** Two docstrings said the backend binds "executor, ledger and state
+store". There was no ledger in it.
+
+So a recovery sequence could run for a week, take three actions, and leave no audit
+trail — the single claim this whole system rests on, quietly untrue on its
+longest-running path. It survived because nothing tested for it: every ledger test
+went through the single-shot engine, and every workflow test asserted on outcomes.
+
+Fixing it surfaced a design question worth recording. The gate results have to reach
+the ledger record, and there were two ways: cache the Verdict in the activity, or
+carry the full gate results back through workflow history. History is correct — a
+record written by a *different worker* later still says why, and the reasons become
+part of Temporal history rather than living in one process's memory. The record is
+built by reconstructing a Verdict from those results rather than re-running the
+gates, because re-running them would produce a second set of answers, at a different
+moment, for a decision already made.
+
+**And then the fix nearly caused the thing it was preventing.** I wrote
+`test_a_failing_ledger_never_stops_the_recovery` on the principle that an audit trail
+able to halt a workflow is a liability. The test hung. Temporal retries a failed
+activity **forever** by default, so my `try/except` never ran and a broken ledger
+wedged the recovery indefinitely — exactly the failure the method exists to prevent,
+arrived at by not configuring anything. A bounded `RetryPolicy` fixes it: a few
+retries cover a transient blip, past that the step is recorded as unrecorded and the
+plan moves on.
+
+Two lessons, and the second is the uncomfortable one. Defaults are decisions someone
+else made for you. And a docstring is not evidence — this one asserted a binding that
+did not exist for as long as nobody checked.
+
 ### Tomorrow
 
 The chaos day: deliberately break things and prove they degrade gracefully.

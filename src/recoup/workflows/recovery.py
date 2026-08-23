@@ -42,6 +42,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from temporalio import activity, workflow
+from temporalio.common import RetryPolicy
 from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner, SandboxRestrictions
 
 with workflow.unsafe.imports_passed_through():
@@ -103,12 +104,35 @@ class RecoveryRequest:
 
 
 @dataclass
+class GateOutcome:
+    """One gate result, in the words it used at the time."""
+
+    gate: str
+    disposition: str
+    reason: str
+
+
+@dataclass
+class RecordRequest:
+    """Everything needed to write one ledger record for one step."""
+
+    step: AuthoriseRequest
+    error_reason: str | None
+    gates: list[GateOutcome]
+    executed_action: str
+    detail: str
+    arm: str
+
+
+@dataclass
 class StepOutcome:
     step: int
     action: str
     executed: bool
     detail: str
     at: str
+    record_hash: str = ""
+    """Ledger record this step produced. Empty only if recording itself failed."""
 
 
 @dataclass
@@ -207,6 +231,14 @@ class AuthoriseResult:
     needs_approval: bool
     denials: list[str]
     explanation: str
+    gates: list[GateOutcome] = field(default_factory=list)
+    """Every gate that ran, passing ones included.
+
+    Carried back through workflow history rather than cached in the activity, so the
+    ledger record can be written by a DIFFERENT worker later without losing the
+    reasons. A summary would make the audit trail say "blocked" without saying why,
+    which is the difference between an audit trail and a log line.
+    """
 
 
 class RecoveryActivities:
@@ -259,7 +291,22 @@ class RecoveryActivities:
             needs_approval=verdict.disposition is Disposition.NEEDS_APPROVAL,
             denials=[str(r.gate) for r in verdict.denials],
             explanation=verdict.explain(),
+            gates=[
+                GateOutcome(gate=str(r.gate), disposition=str(r.disposition), reason=r.reason)
+                for r in verdict.results
+            ],
         )
+
+    @activity.defn(name="record_step")
+    async def record_step(self, req: RecordRequest) -> str:
+        """Write one ledger record for one step of the plan.
+
+        Called on EVERY step, including the ones that did nothing. A workflow that
+        recorded only its actions would answer "why did you message me twice" and go
+        silent on "why did nobody chase this for a week" -- and the second question
+        is the one a merchant actually asks.
+        """
+        return str(self.engine.record_step(req))
 
     @activity.defn(name="execute_step")
     async def execute_step(self, req: AuthoriseRequest) -> str:
@@ -341,6 +388,48 @@ class RecoveryWorkflow:
             "promise_until": self._promise_until,
         }
 
+    async def _record(
+        self,
+        req: AuthoriseRequest,
+        request: RecoveryRequest,
+        gates: list[GateOutcome],
+        executed_action: str,
+        detail: str,
+    ) -> str:
+        """Write the ledger record for one step, whatever happened.
+
+        Recording is never allowed to fail the recovery: an audit trail that can halt
+        a workflow is a liability, and a step that ran but went unrecorded is a
+        smaller problem than a step that never ran because recording broke. The empty
+        hash makes the omission visible rather than pretending it recorded.
+
+        The bounded RetryPolicy is the load-bearing half of that, and its absence is
+        a trap this workflow fell into: Temporal retries a failed activity FOREVER by
+        default, so the try/except below never ran and a broken ledger wedged the
+        whole recovery indefinitely -- the exact failure this method exists to
+        prevent, arrived at by not configuring anything. A few retries cover a
+        transient blip; past that the step is recorded as unrecorded and the plan
+        moves on.
+        """
+        try:
+            return str(
+                await workflow.execute_activity(
+                    "record_step",
+                    RecordRequest(
+                        step=req,
+                        error_reason=request.error_reason,
+                        gates=gates,
+                        executed_action=executed_action,
+                        detail=detail,
+                        arm="treatment",
+                    ),
+                    start_to_close_timeout=timedelta(seconds=30),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+            )
+        except Exception:
+            return ""
+
     @workflow.run
     async def run(self, request: RecoveryRequest) -> RecoveryOutcome:
         diagnosis = diagnose(request.error_reason)
@@ -399,25 +488,37 @@ class RecoveryWorkflow:
                 if self._approved is not True:
                     # Rejected, or nobody looked in time. Either way the money stays
                     # unrecovered and that fact is recorded rather than retried around.
+                    detail = "not approved within the review window"
                     outcome.steps.append(
                         StepOutcome(
                             step=index,
                             action=str(step.action),
                             executed=False,
-                            detail="not approved within the review window",
+                            detail=detail,
                             at=workflow.now().isoformat(),
+                            record_hash=await self._record(
+                                req,
+                                request,
+                                verdict["gates"],
+                                str(ActionKind.QUEUED_FOR_APPROVAL),
+                                detail,
+                            ),
                         )
                     )
                     continue
 
             elif not verdict["allowed"]:
+                detail = f"blocked: {verdict['explanation']}"
                 outcome.steps.append(
                     StepOutcome(
                         step=index,
                         action=str(step.action),
                         executed=False,
-                        detail=f"blocked: {verdict['explanation']}",
+                        detail=detail,
                         at=workflow.now().isoformat(),
+                        record_hash=await self._record(
+                            req, request, verdict["gates"], str(ActionKind.NO_ACTION), detail
+                        ),
                     )
                 )
                 continue
@@ -434,6 +535,9 @@ class RecoveryWorkflow:
                     executed=True,
                     detail=detail,
                     at=workflow.now().isoformat(),
+                    record_hash=await self._record(
+                        req, request, verdict["gates"], str(step.action), detail
+                    ),
                 )
             )
 

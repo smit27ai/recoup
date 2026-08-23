@@ -17,12 +17,24 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from recoup.domain import ActionKind, AtRiskEvent, Channel, Customer, RiskKind
+from recoup.diagnosis.taxonomy import diagnose
+from recoup.domain import ActionKind, Arm, AtRiskEvent, Channel, Customer, RiskKind
 from recoup.execution import Executor
-from recoup.policy.gates import CustomerState, EventState, PolicyConfig
+from recoup.ledger import Ledger
+from recoup.policy.gates import (
+    CustomerState,
+    Disposition,
+    EventState,
+    GateID,
+    GateResult,
+    PolicyConfig,
+    Verdict,
+)
 
 if TYPE_CHECKING:
-    from recoup.workflows.recovery import AuthoriseRequest
+    from recoup.workflows.recovery import AuthoriseRequest, RecordRequest
+
+TAXONOMY_VERSION = "2026-08-23"
 
 
 @dataclass
@@ -73,7 +85,14 @@ class StateStore:
 
 
 class WorkflowBackend:
-    """Binds a workflow's activities to a real executor, ledger and state store."""
+    """Binds a workflow's activities to a real executor, ledger and state store.
+
+    Every step of a durable plan writes a ledger record through `record_step`,
+    including the steps that did nothing. For a while this class named a ledger in
+    its docstring and did not have one, so multi-day recoveries ran for a week and
+    produced no audit trail at all -- the one claim this whole system rests on,
+    quietly untrue on its longest-running path.
+    """
 
     def __init__(
         self,
@@ -81,8 +100,12 @@ class WorkflowBackend:
         store: StateStore | None = None,
         *,
         config: PolicyConfig | None = None,
+        ledger: Ledger | None = None,
     ) -> None:
         self.executor = executor
+        # Ledger defines __len__, so `or` would swap out a caller's empty ledger --
+        # the same trap that produced a double-charge bug in the Razorpay client.
+        self.ledger = ledger if ledger is not None else Ledger()
         # Explicit None checks: several of these define __len__ elsewhere in the
         # codebase and `or` has already caused one double-charge bug here.
         self.store = store if store is not None else StateStore()
@@ -91,6 +114,55 @@ class WorkflowBackend:
     def load_state(self, customer_id: str, event_id: str) -> tuple[CustomerState, EventState]:
         """Read the world as it is right now, not as it was when the plan was made."""
         return self.store.customer_state(customer_id), self.store.event_state(event_id)
+
+    def record_step(self, req: RecordRequest) -> str:
+        """Append one ledger record for one step of a durable plan.
+
+        Reconstructs a Verdict from the gate results the workflow carried back
+        through history, rather than re-running the gates. Re-running them here would
+        produce a SECOND set of answers, at a different moment, for a decision that
+        was already made -- and the audit trail would record reasoning that did not
+        actually authorise anything.
+        """
+        step = req.step
+        moment = datetime.fromisoformat(step.now_iso)
+        verdict = Verdict(
+            results=tuple(
+                GateResult(
+                    gate=GateID(g.gate),
+                    disposition=Disposition(g.disposition),
+                    reason=g.reason,
+                )
+                for g in req.gates
+            ),
+            now=moment,
+        )
+        event = self.store.events.get(step.event_id) or AtRiskEvent(
+            event_id=step.event_id,
+            customer_id=step.customer_id,
+            kind=RiskKind.FAILED_PAYMENT,
+            amount_paise=step.amount_paise,
+            occurred_at=moment,
+            error_reason=req.error_reason,
+            method="card",
+            attempt_number=step.attempt_number,
+        )
+        record = self.ledger.append(
+            event=event,
+            diagnosis=diagnose(req.error_reason),
+            intended=ActionKind(step.action),
+            verdict=verdict,
+            executed=ActionKind(req.executed_action),
+            arm=Arm(req.arm),
+            decided_at=moment,
+            policy_version="workflow-v1",
+            taxonomy_version=TAXONOMY_VERSION,
+            metadata={
+                "workflow_step": str(step.attempt_number),
+                "execution_detail": req.detail,
+            },
+        )
+        return record.record_hash
 
     def execute_for_workflow(self, req: AuthoriseRequest) -> str:
         """Run one authorised step.

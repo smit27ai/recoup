@@ -130,3 +130,4 @@ request_timed_out	gateway	GATEWAY_DOWN	NOW	0	0	razorpay	1
 transaction_daily_count_exceeded	gateway	LIMIT_EXCEEDED	SCHEDULED	0	1	customer	1
 vpa_resolution_failed	gateway	INSTRUMENT_INVALID	SOON	1	1	customer	1
 issuer_host_unreachable	escalated	ISSUER_DOWN	SOON	0	0	bank	1
+merchant_kyc_pending	escalated	MERCHANT_CONFIG	NEVER	0	0	business	0

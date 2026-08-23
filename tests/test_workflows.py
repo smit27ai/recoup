@@ -78,7 +78,11 @@ async def _run(
         env.client,
         task_queue=TASK_QUEUE,
         workflows=[RecoveryWorkflow],
-        activities=[activities.authorise_step, activities.execute_step],
+        activities=[
+            activities.authorise_step,
+            activities.execute_step,
+            activities.record_step,
+        ],
         workflow_runner=sandbox_runner(),
     ):
         handle = await env.client.start_workflow(
@@ -218,7 +222,11 @@ async def test_consent_revoked_mid_sequence_blocks_the_later_contact() -> None:
             env.client,
             task_queue=TASK_QUEUE,
             workflows=[RecoveryWorkflow],
-            activities=[activities.authorise_step, activities.execute_step],
+            activities=[
+                activities.authorise_step,
+                activities.execute_step,
+                activities.record_step,
+            ],
             workflow_runner=sandbox_runner(),
         ):
             handle = await env.client.start_workflow(
@@ -331,3 +339,108 @@ async def test_ops_route_completes_immediately_without_touching_the_customer() -
     assert outcome.steps[0].action == "route_to_ops"
     assert notifier.sent == []
     assert len(backend.executor.ops_queue) == 1
+
+
+# --- the audit trail -------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_every_step_lands_in_the_ledger() -> None:
+    """The gap this closes: workflows ran for days and produced no audit trail at
+    all, which contradicted the central claim of the whole system."""
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        backend, _notifier, _ = _backend()
+        outcome = await _run(
+            env, RecoveryRequest("evt_led1", "cust_1", 99_900, "insufficient_funds"), backend
+        )
+
+    assert len(backend.ledger) == len(outcome.steps) == 3
+    backend.ledger.verify()
+    assert all(s.record_hash for s in outcome.steps), "each step links to its record"
+
+
+@pytest.mark.asyncio
+async def test_steps_that_did_nothing_are_recorded_too() -> None:
+    """'Why did nobody chase this for a week' is the question a merchant actually
+    asks, and a log of actions-only goes silent on exactly that one."""
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        backend, _notifier, store = _backend()
+        activities = RecoveryActivities(backend)
+        async with Worker(
+            env.client,
+            task_queue=TASK_QUEUE,
+            workflows=[RecoveryWorkflow],
+            activities=[
+                activities.authorise_step,
+                activities.execute_step,
+                activities.record_step,
+            ],
+            workflow_runner=sandbox_runner(),
+        ):
+            handle = await env.client.start_workflow(
+                RecoveryWorkflow.run,
+                RecoveryRequest("evt_led2", "cust_1", 99_900, "insufficient_funds"),
+                id=f"recovery-{uuid.uuid4()}",
+                task_queue=TASK_QUEUE,
+            )
+            await env.sleep(timedelta(days=2))
+            store.consent["cust_1"] = False
+            await handle.result()
+
+    blocked = [r for r in backend.ledger if r.denied_by]
+    assert blocked, "the blocked step must be in the ledger, not just absent"
+    assert any("consent" in r.denied_by for r in blocked)
+
+
+@pytest.mark.asyncio
+async def test_the_ledger_keeps_the_gate_reasons_the_workflow_saw() -> None:
+    """Gate reasons travel back through workflow history rather than being cached in
+    an activity, so a record written by a different worker still says WHY."""
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        backend, _notifier, _ = _backend(config=PolicyConfig())
+        await _run(env, RecoveryRequest("evt_led3", "cust_1", 99_900, "card_expired"), backend)
+
+    records = list(backend.ledger)
+    assert records
+    for record in records:
+        assert len(record.gates) == 9, "every gate that ran must be recorded"
+        assert all(g.reason for g in record.gates), "each with its reason, verbatim"
+
+
+@pytest.mark.asyncio
+async def test_a_stopped_workflow_still_leaves_a_trail_of_what_it_did() -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        backend, _notifier, _ = _backend()
+        outcome = await _run(
+            env,
+            RecoveryRequest("evt_led4", "cust_1", 99_900, "insufficient_funds"),
+            backend,
+            signals=[(timedelta(days=2), "payment_recovered", None)],
+        )
+    assert outcome.stopped_because == "recovered"
+    assert len(backend.ledger) == len(outcome.steps)
+    backend.ledger.verify()
+
+
+@pytest.mark.asyncio
+async def test_a_failing_ledger_never_stops_the_recovery() -> None:
+    """An audit trail that can halt a workflow is a liability. A step that ran but
+    went unrecorded is a smaller problem than a step that never ran at all."""
+
+    class BrokenLedger:
+        def append(self, **kwargs: object) -> object:
+            raise RuntimeError("disk full")
+
+        def __len__(self) -> int:
+            return 0
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        backend, _notifier, _ = _backend()
+        backend.ledger = BrokenLedger()  # type: ignore[assignment]
+        outcome = await _run(
+            env, RecoveryRequest("evt_led5", "cust_1", 99_900, "insufficient_funds"), backend
+        )
+
+    assert outcome.stopped_because == "plan exhausted"
+    assert len(outcome.steps) == 3, "the plan still ran"
+    assert all(s.record_hash == "" for s in outcome.steps), "and the gap is visible"
