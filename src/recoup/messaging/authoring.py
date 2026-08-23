@@ -31,6 +31,7 @@ from typing import Any, Protocol, cast
 
 from recoup.domain import ActionKind, Channel
 from recoup.messaging.templates import (
+    LENGTH_LIMITS,
     MessageTemplate,
     TemplateStatus,
     Variable,
