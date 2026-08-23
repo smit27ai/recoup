@@ -332,10 +332,62 @@ are cached too, so a model outage gets asked once, not once per event.
 Tier 2 is an enhancement, never a dependency: any backend failure degrades to "route
 to a human", which is exactly what happens with no tier 2 configured at all.
 
+### Ops console
+
+Built it because of a number from earlier in the day: **21% of at-risk value sits in
+the approval queue by design.** A queue nobody can drain is not a safety mechanism,
+it is a place money goes to die — without a way to work it, that design is just a
+slower kind of losing.
+
+FastAPI + React/TS. Four views, and the one I care about most is the overview,
+because it puts **the cost of compliance in rupees** on the same screen as what was
+recovered. A console that only showed recovery would quietly push its operators
+toward messaging more; the ₹11.3L we chose not to chase has to be as visible as the
+money we got.
+
+Two properties drove the design:
+
+**Reviews append, never edit.** Approving a parked action writes a *new* ledger
+record naming the reviewer. The original said "no human has looked yet" and that
+stays true of the moment it describes — a review is a new fact about a later moment,
+not a correction to an earlier one. A console that could rewrite history would
+destroy the exact property it exists to expose. The header shows live chain
+verification and reports a break rather than hiding it behind a green tick.
+
+**Promotion is validated before it is written.** A rule that would not parse is
+rejected rather than appended: a taxonomy that fails to load takes the whole system
+down at the next restart, long after the reviewer who broke it has gone home. The row
+is parsed by the same code path that reads the file at startup, and the `lru_cache`
+is invalidated on success — without that, a promotion appears to succeed and then
+silently does nothing until the process restarts.
+
+Drove the real UI to verify the loop end to end rather than trusting the tests:
+clicked Approve on a mined rule, watched the badge go 3 → 2, then confirmed the row
+had landed in the TSV and that `diagnose()` now returned it at **tier 1** with
+`contactable=True`. Tier 2 proposes, a human approves, the code is deterministic
+forever after and contact unlocks through the ordinary path. Then reverted the demo
+row so the shipped taxonomy stays authoritative.
+
+### A small bug with a big principle
+
+While driving the console I noticed a rule card reading *"substring match on
+'insufficient'"* for the code `acct_balance_shortfall` — which contains no such
+substring. The stub reported `needles[0]` rather than the needle that actually
+matched.
+
+Cosmetic, except for where it appears: that rationale is shown to a human deciding
+whether to make the rule **permanent**. A plausible-but-wrong explanation is worse
+than no explanation, because it invites approving a rule on the basis of reasoning
+that did not happen. Fixed to report the actual match.
+
+Worth noting the console found it, not the tests — the tests asserted the root cause
+was right, and the root cause *was* right. Only rendering it for a human exposed that
+the justification was fiction. That is the second time today that showing a decision
+to a person caught something every aggregate and assertion had missed.
+
 ### Tomorrow
 
-Propensity model and the bandit. Then the ops console (Node is installed now), which
-is what makes the approval queue and the review queue actually drainable.
+Propensity model and the bandit.
 
 ### Open / not yet done
 
