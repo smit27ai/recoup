@@ -8,6 +8,10 @@ dependencies = [
     # The Razorpay client imports httpx at module level, so this is core -- the
     # execution path does not exist without it.
     "httpx>=0.27",
+    # Propensity model and bandit. numpy/sklearn are core because the default
+    # strategy imports featurise for its feature dimension.
+    "numpy>=2.0",
+    "scikit-learn>=1.5",
     # Windows ships no system zoneinfo database; IST is load-bearing for the
     # quiet-hours gate, so this is a hard dependency, not a dev convenience.
     "tzdata>=2024.1 ; sys_platform == 'win32'",
@@ -55,7 +59,7 @@ files = ["src", "tests"]
 [[tool.mypy.overrides]]
 # The SDK is an optional extra and is imported lazily inside ClaudeEscalator, so
 # type checking must pass with or without it installed.
-module = ["anthropic", "anthropic.*"]
+module = ["anthropic", "anthropic.*", "sklearn.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

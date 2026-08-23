@@ -386,6 +386,25 @@ def run(
             prior.append(ev.occurred_at)
 
         recovered = outcome_rng.random() < gt.probability(executed)
+
+        # Learning strategies see the outcome of what was ACTUALLY executed, not of
+        # what they asked for. If a gate vetoed the action, the bandit must learn
+        # nothing about the action it never got to take -- crediting or blaming it
+        # for an outcome it did not cause is how a bandit teaches itself that
+        # messaging people at 2am does not work, when the truth is it never happened.
+        learn = getattr(strategy, "learn", None)
+        if learn is not None:
+            if executed is intended:
+                learn(ev, diag, cust, executed, recovered)
+            else:
+                # Vetoed. The strategy is told the context was seen but NOT given an
+                # outcome, so its uncertainty falls without its reward estimate
+                # moving. Skipping this entirely is what let a systematically-blocked
+                # action keep maximal exploration bonus forever.
+                blocked_hook = getattr(strategy, "learn_blocked", None)
+                if blocked_hook is not None:
+                    blocked_hook(ev, diag, cust, intended)
+
         outcomes.append(
             Outcome(
                 event_id=ev.event_id,

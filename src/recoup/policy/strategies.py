@@ -71,3 +71,45 @@ STRATEGIES: dict[str, Strategy] = {
     "blast": blast,
     "taxonomy_policy": taxonomy_policy,
 }
+
+
+class BanditStrategy:
+    """Adapter making a learning bandit usable wherever a Strategy is expected.
+
+    Stateful, unlike the plain functions above -- it learns from outcomes fed back
+    via `learn()`. Kept behind the same call signature so the measurement harness can
+    score it head to head against the deterministic policy on identical events and
+    an identical holdout split, which is the only comparison worth making.
+    """
+
+    def __init__(self, bandit: object) -> None:
+        self.bandit = bandit
+        self.last: object | None = None
+
+    def __call__(
+        self, event: AtRiskEvent, diagnosis: Diagnosis | None, customer: Customer
+    ) -> ActionKind:
+        choice = self.bandit.select(event, diagnosis, customer)  # type: ignore[attr-defined]
+        self.last = choice
+        action: ActionKind = choice.action
+        return action
+
+    def learn(
+        self,
+        event: AtRiskEvent,
+        diagnosis: Diagnosis | None,
+        customer: Customer,
+        action: ActionKind,
+        recovered: bool,
+    ) -> None:
+        self.bandit.update(event, diagnosis, customer, action, recovered)  # type: ignore[attr-defined]
+
+    def learn_blocked(
+        self,
+        event: AtRiskEvent,
+        diagnosis: Diagnosis | None,
+        customer: Customer,
+        action: ActionKind,
+    ) -> None:
+        """A gate vetoed the chosen action. Covariance only -- never a reward."""
+        self.bandit.register_blocked(event, diagnosis, customer, action)  # type: ignore[attr-defined]

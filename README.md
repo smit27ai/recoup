@@ -60,10 +60,10 @@ is worth more than any amount of retry budget.
 |---|---|---|
 | Root cause from error code | **Lookup table**, 110 reasons | Deterministic, auditable, 0ms, free |
 | Unmapped / new codes | `claude-opus-5`, strict tool schema | Genuine ambiguity — and it proposes a table row for human review |
-| Recovery propensity | **Gradient boosting** *(day 5)* | The answer is a number, not prose |
-| Intervention choice | **Contextual bandit** *(day 6)* | Explore/exploit is arithmetic |
+| Recovery propensity | **Calibrated logistic regression** | The answer is a number, not prose |
+| Intervention choice | **LinUCB contextual bandit** | Explore/exploit is arithmetic |
 | Compliance gates | **Pure predicates** | Must be provable. Never probabilistic |
-| Message copy | LLM *(day 7)* | High volume, genuinely generative |
+| Message copy | Templates today, LLM next | High volume, genuinely generative |
 
 A language model is very bad at looking things up in a table, and a table is very bad
 at writing Hinglish. The split follows from that.
@@ -229,7 +229,56 @@ tier 2) -> policy -> gates -> Razorpay -> ledger, with uncertain-outcome
 reconciliation and a verifiable audit trail. **179 tests, ruff clean, mypy --strict
 clean.**
 
-Not yet built: propensity model, bandit, durable multi-day workflows.
+Not yet built: durable multi-day workflows, LLM message localisation.
+
+## Learning, and a result I am not going to dress up
+
+The propensity model and bandit are built. **The deterministic policy still wins.**
+
+| strategy | mean lift | sd | mean contacts |
+|---|---|---|---|
+| `taxonomy_policy` | **10.67%** | 2.15% | 579 |
+| bandit | 9.15% | 2.34% | 436 |
+| bandit + offline prior | 8.86% | 2.40% | 410 |
+
+Four seeds, 5,000 events each. The intervals overlap heavily so the gap is not
+resolved at this sample size, but the bandit does not beat the table, and saying
+otherwise would be the easiest lie in this repository to tell.
+
+That result makes sense rather than needing to be explained away. The structure here
+is genuinely *known*: an expired card is not recoverable by retry, and the taxonomy
+says so as fact. A policy encoding known structure should beat one that must
+rediscover it from noisy outcomes -- if it did not, the taxonomy would be wrong. A
+bandit earns its place where the table is **silent**: which of several admissible
+contact variants, at what hour, on which channel. Those are questions of evidence
+with no documented answer, and they are the honest next step. `taxonomy_policy`
+stays the default; the bandit ships behind a flag.
+
+### Two bugs the numbers found that the code hid
+
+**Starvation by veto.** The first bandit chose `nudge_with_incentive` on 3,052 of
+5,000 events and produced **2 contacts**. The incentive carries 15% off, standing
+authority is 10%, so every one was parked for approval -- never executed, so its arm
+never learned, so it kept maximal uncertainty and therefore maximal exploration bonus
+*forever*. The arm that could never run was permanently the most attractive one.
+
+Fixed in two halves: constraints knowable at selection time are filtered out of the
+admissible set, and contextual vetoes (quiet hours, consent) now update the arm
+covariance but **not** its reward vector -- uncertainty falls because we saw the
+context, the estimate does not move because nothing happened. Teaching it that
+"messaging at 2am does not work" would be a lie; we never messaged anyone.
+
+**Rewarding gross instead of lift.** The same mistake this whole project exists to
+avoid, committed inside it. A bandit rewarded on raw recovery learns that doing
+nothing is *excellent* on a `GATEWAY_DOWN` failure that self-heals 52% of the time.
+Non-null arms now learn their **advantage** over what the NO_ACTION arm predicts for
+the same context, so an action is chosen only when evidence says it *caused*
+recovery. Worth 7.45% to 9.30% on one seed.
+
+The propensity model reports **ECE 0.024** on held-out data, because calibration --
+not AUC -- is what decides whether the bandit can treat its output as an expected
+value. A model that ranks perfectly but says 0.9 when the truth is 0.4 makes the
+bandit systematically over-act, and ranking metrics cannot see that failure at all.
 
 ## Ops console
 
