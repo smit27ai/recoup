@@ -5,6 +5,9 @@ description = "A recovery decisioning control plane: diagnose at-risk revenue, c
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.9",
+    # The Razorpay client imports httpx at module level, so this is core -- the
+    # execution path does not exist without it.
+    "httpx>=0.27",
     # Windows ships no system zoneinfo database; IST is load-bearing for the
     # quiet-hours gate, so this is a hard dependency, not a dev convenience.
     "tzdata>=2024.1 ; sys_platform == 'win32'",
@@ -16,6 +19,12 @@ llm = [
     # error code routes to a human, which is the same thing tier 2 does when it is
     # unsure -- so the system behaves identically, just with more ops tickets.
     "anthropic>=0.40",
+]
+console = [
+    # Ops console API. Optional: the engine, gates, ledger and CLI demo all run
+    # without it -- it exists so a human can drain the approval and rule queues.
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
 ]
 dev = [
     "pytest>=8.3",

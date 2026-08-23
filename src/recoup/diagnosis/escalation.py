@@ -353,7 +353,13 @@ class StubEscalator:
             ),
         )
         for needles, cause, retry, new_inst, cust_act, owner, in_scope in rules:
-            if any(n in text for n in needles):
+            # Report the needle that ACTUALLY matched, not the first in the tuple.
+            # This rationale is shown to a human deciding whether to promote the rule
+            # into the permanent table, so a plausible-but-wrong explanation is worse
+            # than none: it invites approving a rule that fired for a different
+            # reason than the one stated.
+            matched = next((n for n in needles if n in text), None)
+            if matched is not None:
                 return Proposal(
                     reason=reason,
                     root_cause=cause,
@@ -363,7 +369,7 @@ class StubEscalator:
                     owner=owner,
                     in_scope=in_scope,
                     confidence=self.confidence,
-                    rationale=f"substring match on {needles[0]!r} (stub backend)",
+                    rationale=f"substring match on {matched!r} (stub backend)",
                     model=self.name,
                     proposed_at=datetime.now(),
                 )

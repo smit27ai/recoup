@@ -229,8 +229,39 @@ tier 2) -> policy -> gates -> Razorpay -> ledger, with uncertain-outcome
 reconciliation and a verifiable audit trail. **179 tests, ruff clean, mypy --strict
 clean.**
 
-Not yet built: propensity model, bandit, durable multi-day workflows, ops console,
-approval-queue reviewer.
+Not yet built: propensity model, bandit, durable multi-day workflows.
+
+## Ops console
+
+Two queues in this system can only be drained by a human: **approvals** (actions over
+the unattended authority limit) and **rules** (tier-2 proposals awaiting promotion).
+A queue nobody can drain is not a safety mechanism, it is a place money goes to die
+— Recoup parks ~21% of at-risk value in the approval queue *by design*, and without
+a way to work it that design is just a slower kind of losing.
+
+```bash
+python -m recoup.console.server     # API + seeded data on :8000
+npm --prefix console run dev        # console on :5173
+```
+
+Four views: an overview that puts **the cost of compliance in rupees** next to what
+was recovered; a decision list with a drawer showing every gate that ran in the words
+it used at the time; the approval queue; and the rule-review queue.
+
+Two properties it is built around:
+
+- **Reviews append, never edit.** Approving a parked action writes a *new* ledger
+  record naming the reviewer. The original said "no human has looked yet" and that
+  stays true of the moment it describes. A console that could rewrite history would
+  destroy the exact property it exists to expose — and the header shows live chain
+  verification, reporting a break rather than hiding it.
+- **Promoting a rule is validated before it is written.** A rule that would not parse
+  is rejected rather than appended, because a taxonomy that fails to load takes the
+  system down at the next restart, long after the reviewer who broke it went home.
+
+Approving a rule closes the loop end to end: the code moves from tier 2 to tier 1,
+is resolved by table lookup from then on with no model call, and contact unlocks
+through the ordinary path — having been seen by a person.
 
 ## Tier 2: where a model earns its place
 

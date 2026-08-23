@@ -141,6 +141,59 @@ def load_taxonomy(path: Path | None = None) -> dict[str, Diagnosis]:
     return table
 
 
+class PromotionError(Exception):
+    """A reviewed rule could not be promoted. The file is left untouched."""
+
+
+def promote_rule(row: str, *, path: Path | None = None) -> Diagnosis:
+    """Append a human-reviewed rule to the taxonomy, making that code tier 1.
+
+    This is the far end of the rule-mining loop: tier 2 proposes, a reviewer
+    approves, and from here on the code is resolved by table lookup -- free,
+    instant, deterministic, and now permitted to authorise contact through the
+    ordinary path.
+
+    Validated before it touches the file, and the row is parsed by exactly the same
+    code path that reads the file at startup. A rule that would not load is rejected
+    rather than written, because a taxonomy that fails to parse takes the whole
+    system down at the next restart -- long after the reviewer who broke it has gone
+    home.
+    """
+    src = path or TAXONOMY_PATH
+    fields = row.rstrip("\n").split("\t")
+    if len(fields) != len(_FIELDS):
+        raise PromotionError(f"expected {len(_FIELDS)} tab-separated columns, got {len(fields)}")
+
+    rec = dict(zip(_FIELDS, fields, strict=True))
+    reason = rec["reason"].strip()
+    if not reason:
+        raise PromotionError("rule has no error reason")
+    if reason in load_taxonomy(path):
+        raise PromotionError(f"{reason!r} is already in the taxonomy")
+
+    try:
+        entry = Diagnosis(
+            reason=reason,
+            error_class=rec["error_class"],
+            root_cause=RootCause(rec["root_cause"]),
+            retry_class=RetryClass(rec["retry_class"]),
+            new_instrument=rec["new_instrument"] == "1",
+            customer_action=rec["customer_action"] == "1",
+            owner=Owner(rec["owner"]),
+            in_scope=rec["in_scope"] == "1",
+        )
+    except ValueError as exc:
+        raise PromotionError(f"invalid rule for {reason!r}: {exc}") from exc
+
+    with src.open("a", encoding="utf-8", newline="") as fh:
+        fh.write("\t".join(fields) + "\n")
+
+    # The table is cached for the process lifetime, so a promotion that does not
+    # invalidate it would appear to have silently failed until the next restart.
+    load_taxonomy.cache_clear()
+    return entry
+
+
 def diagnose(error_reason: str | None) -> Diagnosis | None:
     """Tier 1 lookup.
 

@@ -18,3 +18,5 @@ artifacts/
 
 # stray local files
 Screenshot*.png
+node_modules/
+console/dist/
