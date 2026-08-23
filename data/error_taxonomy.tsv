@@ -1,0 +1,131 @@
+# Recoup failure taxonomy - maps Razorpay error_reason -> recovery-relevant root cause.
+#
+# SOURCE: https://razorpay.com/docs/errors/payments/list/  (scraped 2026-08-23)
+# The reason + error_class columns are verbatim from that page. Everything to the
+# right of them is a Recoup judgement call and is what the policy engine consumes.
+#
+# The insight this file encodes: for revenue recovery the ~120 error reasons collapse
+# onto four decision-relevant questions --
+#   1. root_cause        why the money did not move (16 buckets)
+#   2. retry_class       when, if ever, another attempt is worth making
+#   3. new_instrument    whether retrying the SAME instrument is provably futile
+#   4. customer_action   whether a human must act (i.e. whether contact is warranted)
+# ...plus in_scope: whether this is recoverable revenue at all, or a merchant
+# integration bug / ops ticket that must be routed AWAY from the recovery queue
+# instead of dunned. Dunning a customer over our own invalid_order_id is the single
+# most expensive mistake this system can make.
+#
+# retry_class:  NOW (minutes) | SOON (hours) | SCHEDULED (days) | NEVER
+# owner:        customer | business | bank | razorpay
+#
+# reason	error_class	root_cause	retry_class	new_instrument	customer_action	owner	in_scope
+amount_less_than_minimum_amount	bad_request	INTEGRATION_BUG	NEVER	0	0	business	0
+authentication_failed	bad_request	AUTH_FAILED	NOW	0	1	customer	1
+bank_account_invalid	bad_request	INSTRUMENT_INVALID	NEVER	1	1	customer	1
+bank_account_validation_failed	bad_request	INSTRUMENT_INVALID	NEVER	1	1	customer	1
+bank_not_enabled	bad_request	MERCHANT_CONFIG	NEVER	0	0	business	0
+bank_technical_error	bad_request	ISSUER_DOWN	SOON	0	0	bank	1
+capture_failed	bad_request	OPS	NEVER	0	0	razorpay	0
+card_expired	bad_request	INSTRUMENT_INVALID	NEVER	1	1	customer	1
+card_network_not_enabled	bad_request	MERCHANT_CONFIG	NEVER	0	0	business	0
+card_not_enrolled	bad_request	INSTRUMENT_NOT_ENROLLED	NEVER	1	1	customer	1
+card_number_invalid	bad_request	INSTRUMENT_INVALID	NEVER	1	1	customer	1
+card_type_invalid	bad_request	INSTRUMENT_INVALID	NEVER	1	1	customer	1
+compliance_violation	bad_request	COMPLIANCE	NEVER	0	0	business	0
+debit_instrument_blocked	bad_request	INSTRUMENT_BLOCKED	NEVER	1	1	customer	1
+duplicate_refund_id	bad_request	INTEGRATION_BUG	NEVER	0	0	business	0
+duplicate_request	bad_request	INTEGRATION_BUG	NEVER	0	0	business	0
+emi_greater_than_max_amount	bad_request	CREDIT_INELIGIBLE	NEVER	1	1	customer	1
+emi_plan_unavailable	bad_request	CREDIT_INELIGIBLE	NEVER	1	1	customer	1
+incorrect_atm_pin	bad_request	AUTH_FAILED	NOW	0	1	customer	1
+incorrect_card_details	bad_request	AUTH_FAILED	NOW	0	1	customer	1
+incorrect_card_expiry_date	bad_request	AUTH_FAILED	NOW	0	1	customer	1
+incorrect_cardholder_name	bad_request	AUTH_FAILED	NOW	0	1	customer	1
+incorrect_cvv	bad_request	AUTH_FAILED	NOW	0	1	customer	1
+incorrect_otp	bad_request	AUTH_FAILED	NOW	0	1	customer	1
+incorrect_pin	bad_request	AUTH_FAILED	NOW	0	1	customer	1
+input_validation_failed	bad_request	INTEGRATION_BUG	NEVER	0	0	business	0
+insufficient_funds	bad_request	FUNDS	SCHEDULED	0	1	customer	1
+international_transaction_not_allowed	bad_request	INSTRUMENT_BLOCKED	NEVER	1	1	customer	1
+invalid_amount	bad_request	INTEGRATION_BUG	NEVER	0	0	business	0
+invalid_currency	bad_request	INTEGRATION_BUG	NEVER	0	0	business	0
+invalid_device	bad_request	INSTRUMENT_INVALID	NEVER	1	1	customer	1
+invalid_email	bad_request	INTEGRATION_BUG	NEVER	0	0	business	0
+invalid_mobile_number	bad_request	INSTRUMENT_INVALID	NEVER	0	1	customer	1
+invalid_order_id	bad_request	INTEGRATION_BUG	NEVER	0	0	business	0
+invalid_request	bad_request	INTEGRATION_BUG	NEVER	0	0	business	0
+invalid_user_details	bad_request	INSTRUMENT_INVALID	NEVER	0	1	customer	1
+invalid_vpa	bad_request	INSTRUMENT_INVALID	NEVER	1	1	customer	1
+live_mode_not_enabled	bad_request	MERCHANT_CONFIG	NEVER	0	0	business	0
+merchant_not_activated	bad_request	MERCHANT_CONFIG	NEVER	0	0	business	0
+mismatch_in_transaction_details	bad_request	INTEGRATION_BUG	NEVER	0	0	business	0
+mobile_number_invalid	bad_request	INSTRUMENT_INVALID	NEVER	0	1	customer	1
+order_already_paid	bad_request	INTEGRATION_BUG	NEVER	0	0	business	0
+order_payment_method_mismatch	bad_request	INTEGRATION_BUG	NEVER	0	0	business	0
+order_amount_mismatch	bad_request	INTEGRATION_BUG	NEVER	0	0	business	0
+otp_attempts_exceeded	bad_request	AUTH_FAILED	SOON	0	1	customer	1
+otp_expired	bad_request	AUTH_ABANDONED	NOW	0	1	customer	1
+payment_cancelled	bad_request	AUTH_ABANDONED	NOW	0	1	customer	1
+payment_failed	bad_request	UNKNOWN	SOON	0	1	bank	1
+payment_method_not_enabled	bad_request	MERCHANT_CONFIG	NEVER	0	0	business	0
+payment_pending_approval	bad_request	OPS	SOON	0	0	business	0
+payment_risk_check_failed	bad_request	RISK_DECLINE	NEVER	1	1	customer	1
+payment_timed_out	bad_request	AUTH_ABANDONED	NOW	0	1	customer	1
+pin_attempts_exceeded	bad_request	AUTH_FAILED	SOON	0	1	customer	1
+pin_not_set	bad_request	INSTRUMENT_NOT_ENROLLED	NEVER	0	1	customer	1
+record_not_found	bad_request	INTEGRATION_BUG	NEVER	0	0	business	0
+recurring_payment_not_enabled	bad_request	MERCHANT_CONFIG	NEVER	0	0	business	0
+refund_limit_crossed	bad_request	OPS	NEVER	0	0	razorpay	0
+server_error	bad_request	GATEWAY_DOWN	NOW	0	0	razorpay	1
+transaction_daily_limit_exceeded	bad_request	LIMIT_EXCEEDED	SCHEDULED	0	1	customer	1
+transaction_limit_exceeded	bad_request	LIMIT_EXCEEDED	NEVER	1	1	customer	1
+transaction_frequency_limit_exceeded	bad_request	LIMIT_EXCEEDED	SCHEDULED	0	1	customer	1
+transaction_on_vpa_restricted	bad_request	INSTRUMENT_BLOCKED	NEVER	1	1	customer	1
+upi_app_technical_error	bad_request	PSP_DOWN	NOW	0	0	bank	1
+upi_autopay_not_supported_on_psp	bad_request	MANDATE_PROBLEM	NEVER	1	1	customer	1
+upi_collect_not_enabled	bad_request	MERCHANT_CONFIG	NEVER	0	0	business	0
+upi_intent_not_enabled	bad_request	MERCHANT_CONFIG	NEVER	0	0	business	0
+user_not_eligible	bad_request	CREDIT_INELIGIBLE	NEVER	1	1	customer	1
+user_not_registered_for_netbanking	bad_request	INSTRUMENT_NOT_ENROLLED	NEVER	1	1	customer	1
+verification_failed	bad_request	GATEWAY_DOWN	NOW	0	0	razorpay	1
+authorisation_declined_by_psp	gateway	PSP_DOWN	SOON	0	0	bank	1
+bank_cutoff_in_progress	gateway	ISSUER_DOWN	SOON	0	0	bank	1
+bank_not_available	gateway	ISSUER_DOWN	SOON	0	0	bank	1
+beneficiary_account_does_not_exist	gateway	OPS	NEVER	0	0	razorpay	0
+beneficiary_account_dormant	gateway	OPS	NEVER	0	0	razorpay	0
+card_declined	gateway	UNKNOWN	SOON	1	1	bank	1
+collect_on_mcc_blocked	gateway	COMPLIANCE	NEVER	0	0	business	0
+collect_request_pending	gateway	AUTH_ABANDONED	SOON	0	1	customer	1
+credit_limit_exceeded	gateway	LIMIT_EXCEEDED	NEVER	1	1	customer	1
+credit_limit_expired	gateway	CREDIT_INELIGIBLE	NEVER	1	1	customer	1
+credit_limit_inactive	gateway	CREDIT_INELIGIBLE	NEVER	1	1	customer	1
+credit_limit_not_approved	gateway	CREDIT_INELIGIBLE	NEVER	1	1	customer	1
+credit_not_permitted	gateway	CREDIT_INELIGIBLE	NEVER	1	1	customer	1
+credit_failed	gateway	CREDIT_INELIGIBLE	SOON	1	1	customer	1
+debit_declined	gateway	UNKNOWN	SOON	1	1	bank	1
+deemed_transaction	gateway	OPS	NEVER	0	0	razorpay	0
+debit_instrument_inactive	gateway	INSTRUMENT_BLOCKED	NEVER	1	1	customer	1
+duplicate_rrn_found	gateway	GATEWAY_DOWN	NOW	0	0	razorpay	1
+funds_blocked_by_mandate	gateway	FUNDS	SCHEDULED	1	1	customer	1
+gateway_technical_error	gateway	GATEWAY_DOWN	NOW	0	0	razorpay	1
+invalid_response_from_gateway	gateway	GATEWAY_DOWN	NOW	0	0	razorpay	1
+issuer_technical_error	gateway	ISSUER_DOWN	SOON	0	0	bank	1
+mandate_creation_declined	gateway	MANDATE_PROBLEM	NEVER	1	1	customer	1
+mandate_creation_expired	gateway	MANDATE_PROBLEM	NOW	0	1	customer	1
+mandate_creation_failed	gateway	MANDATE_PROBLEM	SOON	0	1	customer	1
+mandate_creation_timeout	gateway	MANDATE_PROBLEM	NOW	0	1	customer	1
+mcc_amount_limit_exceeded	gateway	COMPLIANCE	NEVER	0	0	business	0
+payment_amount_tampered	gateway	INTEGRATION_BUG	NEVER	0	0	business	0
+payment_collect_request_expired	gateway	AUTH_ABANDONED	NOW	0	1	customer	1
+payment_declined	gateway	UNKNOWN	SOON	1	1	bank	1
+payment_declined_due_to_high_traffic	gateway	GATEWAY_DOWN	SOON	0	0	razorpay	1
+payment_pending	gateway	AUTH_ABANDONED	SOON	0	1	customer	1
+payment_session_expired	gateway	AUTH_ABANDONED	NOW	0	1	customer	1
+psp_app_not_available	gateway	PSP_DOWN	SOON	1	1	customer	1
+psp_app_not_supported	gateway	PSP_DOWN	NEVER	1	1	customer	1
+psp_not_available	gateway	PSP_DOWN	SOON	1	1	customer	1
+psp_not_registered	gateway	INSTRUMENT_NOT_ENROLLED	NEVER	1	1	customer	1
+reqauth_mandate_not_acknowledged	gateway	MANDATE_PROBLEM	NOW	0	1	customer	1
+request_timed_out	gateway	GATEWAY_DOWN	NOW	0	0	razorpay	1
+transaction_daily_count_exceeded	gateway	LIMIT_EXCEEDED	SCHEDULED	0	1	customer	1
+vpa_resolution_failed	gateway	INSTRUMENT_INVALID	SOON	1	1	customer	1

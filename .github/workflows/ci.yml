@@ -1,0 +1,55 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check src tests
+
+      - name: Format check
+        run: ruff format --check src tests
+
+      - name: Types
+        run: mypy src
+
+      - name: Tests
+        run: pytest -q
+
+      # The measurement rig is a CI gate, not a notebook. test_aa_null is the
+      # load-bearing one: if a strategy that does nothing measures as doing
+      # something, every number this project reports is untrustworthy, and that
+      # must break the build rather than show up in a demo.
+      - name: Measurement integrity (A/A)
+        run: pytest tests/test_measurement.py -q
+
+      - name: Evaluation run
+        run: |
+          python -c "
+          from recoup.generator.synthetic import ScenarioGenerator
+          from recoup.measure.harness import run, compare
+          from recoup.policy.strategies import STRATEGIES, taxonomy_policy
+          s = ScenarioGenerator().generate(5000)
+          reports = [run(s, f, n) for n, f in STRATEGIES.items()]
+          print(compare(reports))
+          policy = next(r for r in reports if r.strategy == 'taxonomy_policy')
+          lo, _ = policy.lift_ci()
+          assert lo > 0, f'policy lift CI includes zero: {policy.lift_ci()}'
+          print(f'OK: lift {policy.lift:+.2%}, CI lower bound {lo:+.2%}')
+          "
