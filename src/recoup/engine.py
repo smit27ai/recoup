@@ -38,7 +38,7 @@ from recoup.diagnosis.escalation import EscalationService
 from recoup.diagnosis.taxonomy import Diagnosis, diagnose
 from recoup.domain import ActionKind, Arm, AtRiskEvent, Customer
 from recoup.execution import ExecutionResult, ExecutionStatus, Executor
-from recoup.ledger import DecisionRecord, Ledger
+from recoup.ledger import DecisionRecord, GateRecord, Ledger
 from recoup.policy.gates import (
     CustomerState,
     Disposition,
@@ -88,6 +88,51 @@ class Handled:
         return self.record.explain()
 
 
+def _unrecorded(
+    event: AtRiskEvent,
+    intent: Intent,
+    executed: ActionKind,
+    verdict: Verdict,
+    now: datetime,
+    result: ExecutionResult,
+    error: Exception,
+) -> DecisionRecord:
+    """A decision that happened but could not be written down.
+
+    Carries an EMPTY record_hash on purpose. That is the signal a caller checks and
+    a console surfaces -- an unrecorded action must look different from a recorded
+    one, because the whole audit trail is worthless if a gap can pass for a record.
+    """
+    return DecisionRecord(
+        seq=-1,
+        decided_at=now.isoformat(),
+        event_id=event.event_id,
+        customer_id=event.customer_id,
+        amount_paise=event.amount_paise,
+        error_reason=event.error_reason,
+        root_cause=str(intent.diagnosis.root_cause) if intent.diagnosis else None,
+        diagnosis_tier=intent.diagnosis.tier if intent.diagnosis else None,
+        intended_action=str(intent.action),
+        gates=tuple(
+            GateRecord(gate=str(r.gate), disposition=str(r.disposition), reason=r.reason)
+            for r in verdict.results
+        ),
+        disposition=str(verdict.disposition),
+        executed_action=str(executed),
+        arm=str(intent.arm),
+        recovered=None,
+        policy_version=POLICY_VERSION,
+        taxonomy_version=TAXONOMY_VERSION,
+        prev_hash="",
+        record_hash="",
+        metadata={
+            "execution_status": str(result.status),
+            "execution_detail": result.detail,
+            "LEDGER_WRITE_FAILED": f"{type(error).__name__}: {error}",
+        },
+    )
+
+
 class RecoveryEngine:
     """Binds the pure decision layers to the side-effecting one."""
 
@@ -114,6 +159,17 @@ class RecoveryEngine:
         self.config = config if config is not None else PolicyConfig()
         self.holdout_rate = holdout_rate
         self._rng = random.Random(seed)
+        self.ledger_healthy = True
+        """Circuit breaker on the audit trail.
+
+        You cannot know the ledger is unwritable until you try, so the first failure
+        is unavoidable -- one action goes out unrecorded. Every action after it
+        refuses. That is the fail-closed half: acting without an audit trail is not
+        something a payments system should do twice, and "we did nothing and here is
+        why" is an accounted outcome in a way that "we acted and lost the record" is
+        not. Chaos testing is what forced this: without it the engine happily ran a
+        whole batch unrecorded.
+        """
 
     # --- stage 1: decide (pure) --------------------------------------------
 
@@ -179,27 +235,60 @@ class RecoveryEngine:
         verdict = self.authorise(intent, customer_state, event_state, now)
 
         executed = self._resolve(intent, verdict)
-        result = self.executor.execute(
-            executed, event, customer, now=now, discount_bps=intent.discount_bps
-        )
 
-        record = self.ledger.append(
-            event=event,
-            diagnosis=intent.diagnosis,
-            intended=intent.action,
-            verdict=verdict,
-            executed=executed,
-            arm=intent.arm,
-            decided_at=now,
-            recovered=None,  # settled later, by a payment.captured webhook
-            policy_version=POLICY_VERSION,
-            taxonomy_version=TAXONOMY_VERSION,
-            metadata={
-                "execution_status": str(result.status),
-                "execution_detail": result.detail,
-                **result.artifacts,
-            },
-        )
+        if not self.ledger_healthy and executed is not ActionKind.NO_ACTION:
+            # The audit trail is known broken. Refuse rather than act unrecorded.
+            # The money stays unrecovered, which is recoverable later; an unrecorded
+            # action is not.
+            executed = ActionKind.NO_ACTION
+            result = ExecutionResult(
+                ExecutionStatus.UNRESOLVED,
+                executed,
+                "audit trail unavailable, refusing to act until it is restored",
+            )
+        else:
+            result = self.executor.execute(
+                executed, event, customer, now=now, discount_bps=intent.discount_bps
+            )
+
+        # Recording happens AFTER the side effect, and that position decides how a
+        # ledger failure must be handled.
+        #
+        # Two positions, two opposite correct answers. Recording an INTENT before
+        # acting should fail closed: nothing has happened yet, so refusing to act
+        # costs nothing and acting unrecorded is indefensible. Recording an OUTCOME
+        # after acting must fail OPEN: the money already moved, so raising here
+        # loses the record AND abandons the rest of the batch, which is strictly
+        # worse than the gap it is reacting to. Chaos testing found this crashing --
+        # one unwritable ledger stopped an entire run mid-batch, after the actions
+        # had already gone out.
+        #
+        # The stronger design is two-phase: record the intent, act, record the
+        # outcome. Not done here because it doubles the records per decision and
+        # this position only needs the fail-open half. The gap is made loud instead
+        # of silent: an empty record_hash is the signal, and callers surface it.
+        try:
+            record = self.ledger.append(
+                event=event,
+                diagnosis=intent.diagnosis,
+                intended=intent.action,
+                verdict=verdict,
+                executed=executed,
+                arm=intent.arm,
+                decided_at=now,
+                recovered=None,  # settled later, by a payment.captured webhook
+                policy_version=POLICY_VERSION,
+                taxonomy_version=TAXONOMY_VERSION,
+                metadata={
+                    "execution_status": str(result.status),
+                    "execution_detail": result.detail,
+                    **result.artifacts,
+                },
+            )
+            self.ledger_healthy = True
+        except Exception as exc:
+            self.ledger_healthy = False
+            record = _unrecorded(event, intent, executed, verdict, now, result, exc)
         return Handled(
             intent=intent, verdict=verdict, executed=executed, result=result, record=record
         )

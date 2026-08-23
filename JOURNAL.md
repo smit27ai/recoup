@@ -506,9 +506,48 @@ Two lessons, and the second is the uncomfortable one. Defaults are decisions som
 else made for you. And a docstring is not evidence — this one asserted a binding that
 did not exist for as long as nobody checked.
 
+### Chaos day
+
+Built the chaos harness invariant-first rather than fault-first. Listing failure
+modes is endless and you always miss one; the useful move is stating the handful of
+things that must hold no matter what breaks — no double charge, no unconsented
+contact, no silent loss, ledger verifies — and then attacking them. Faults hit the
+real client, real gates, real ledger. A chaos suite that stubs the thing it is
+testing proves only that the stub works.
+
+**7 of 8 survived, and the 8th is left failing.**
+
+The failure was real: an unwritable ledger **crashed** the engine. And because the
+ledger is written *after* execution, crashing there is the worst possible response —
+the action already went out, and now we have lost the record *and* abandoned the rest
+of the batch.
+
+That gave a clean rule I had been applying inconsistently. Recording an **intent**
+before acting should fail **closed**: nothing has happened yet, so refusing costs
+nothing and acting unrecorded is indefensible. Recording an **outcome** after acting
+must fail **open**: the money already moved, so raising is strictly worse than the
+gap it reacts to. I had the workflow path right and the engine path wrong, and only
+chaos testing surfaced the inconsistency.
+
+Fixed with a circuit breaker: the first failure is unavoidable (you cannot know the
+ledger is broken until you write to it), and every event after it refuses to act.
+That took the damage from 10 of 10 events unrecorded to exactly 1.
+
+**And then I nearly cheated.** The invariant still fires on that one event. It would
+have been easy to adjust `no_silent_loss` to tolerate a single miss and report 8/8
+green. I left it failing and added a `residual` field instead, stating precisely what
+still breaks, how far it goes, and what would fix it — two-phase recording, which I
+did not build because it doubles records per decision.
+
+A chaos suite where everything passes is a chaos suite that is not trying. 8/8 green
+would have been a worse artefact than 7/8 with the eighth honestly described.
+
+Every fault is now also a pytest regression, so a future change that reintroduces
+double-charging under a timeout fails the build rather than a script nobody ran.
+
 ### Tomorrow
 
-The chaos day: deliberately break things and prove they degrade gracefully.
+Live integration once credentials exist, then the video.
 
 ### Open / not yet done
 

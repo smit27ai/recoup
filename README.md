@@ -231,6 +231,62 @@ clean.**
 
 Everything in the architecture above is built and tested.
 
+## Chaos: what still holds when things break
+
+```bash
+python -m recoup.chaos
+```
+
+Every other test asks whether a component works. This one asks what the system does
+with somebody's money when a dependency fails in a way nobody planned for.
+
+The design is **invariant-first, not fault-first**. Listing failure modes is endless
+and you always miss one; the useful move is to state the handful of things that must
+hold no matter what breaks, then attack them:
+
+| invariant | why |
+|---|---|
+| no double charge | the same attempt never produces two orders |
+| no unconsented contact | nobody is messaged who should not be, ever |
+| no silent loss | every rupee ends somewhere a human can find it |
+| ledger verifies | whatever happened, the chain still proves what happened |
+
+Faults hit the **real** code paths -- real client, real gates, real ledger. A chaos
+suite that stubs the thing it is testing proves only that the stub works.
+
+```
+  [OK  ] write timeout, request landed
+         broke:  writes succeed upstream but the response is lost
+         did:    reconciled by receipt instead of retried; no duplicate orders
+         note:   46 orders actually created upstream, 19 claimed
+
+  [FAIL] ledger unwritable
+         broke:  every ledger append raises
+         did:    one action slips through unrecorded, then the breaker opens
+         BROKE:  1 of 10 events ended in no recorded state
+         KNOWN:  exactly one event acts unrecorded, and that is irreducible with
+                 post-hoc recording... two-phase recording would eliminate it
+```
+
+**7/8 survive. The 8th is left failing.**
+
+It found two real bugs. The engine *crashed* on an unwritable ledger — and because
+the ledger is written **after** execution, crashing there loses the record *and*
+abandons the rest of the batch, after the actions already went out. That gave a clean
+rule for where each behaviour belongs: recording an **intent** before acting should
+fail **closed**; recording an **outcome** after acting must fail **open**. A circuit
+breaker now opens after the first failure so every later event refuses to act rather
+than acting unrecorded.
+
+The residual — exactly one unrecorded action — is irreducible with post-hoc
+recording: you cannot know the ledger is broken until you write to it. Two-phase
+recording would fix it and is not built, so the limitation is **stated rather than
+tuned away**. Tuning an invariant until it goes green is how a chaos suite becomes
+decoration.
+
+Each fault is also a pytest regression, so a future change that reintroduces
+double-charging under a timeout fails the build rather than a script nobody ran.
+
 ## Message localisation, and why no model runs in the send path
 
 The obvious build for this is to generate Hindi and Hinglish copy at send time. In
