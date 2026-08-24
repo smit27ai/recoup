@@ -83,8 +83,11 @@ nav.tabs .badge {
 
 .bars { display: grid; gap: 7px; }
 .bar { display: grid; grid-template-columns: 200px 1fr 62px; align-items: center; gap: 12px; font-size: 13px; }
-.bar .track { background: var(--panel-2); border-radius: 3px; height: 8px; overflow: hidden; }
-.bar .fill { height: 100%; background: var(--accent); border-radius: 3px; }
+.bar .track { display: block; background: var(--panel-2); border-radius: 3px; height: 8px; overflow: hidden; }
+/* display:block is load-bearing. A <span> is inline by default, and an inline box
+   ignores width and height -- so the fill rendered as nothing and every bar chart
+   was a blank grey track. It looked like the data had not loaded. */
+.bar .fill { display: block; height: 100%; background: var(--accent); border-radius: 3px; min-width: 2px; }
 .bar .fill.deny { background: var(--deny); }
 .bar .n { font-family: var(--font-mono); text-align: right; color: var(--muted); }
 .bar .k { font-family: var(--font-mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; }
