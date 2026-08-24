@@ -576,6 +576,32 @@ Worth noting the shape: this is the third time in this project that a number mov
 slightly was the only visible trace of something real. Aggregates hide state-machine
 bugs; a rendered decision found one; a rule count found this one.
 
+### The charts were never drawing
+
+Took a screenshot of the console to show someone, and every bar chart was a blank
+grey track. No fill. On any tab. Since the day it was built.
+
+`.fill` is a `<span>`, and a span is `display: inline` by default. An inline box
+ignores width and height, so the fill drew nothing. One CSS property.
+
+The interesting part is how it survived. Nothing in 304 tests touches CSS, and every
+check I had run against the console went through the API or the accessibility tree.
+**Both reported the data as present — because it was present.** It simply was not
+visible. An accessibility tree will happily tell you a zero-height element exists.
+
+And on screen it presented as *data that failed to load*, which is the worst way for
+a bug to present: the obvious next move is to go debugging an API that was working
+perfectly.
+
+Fourth time in this project that rendering something for a human found what every
+automated check missed. Aggregates hid a state-machine bug. A decision trace exposed
+a fabricated rationale. A pending-rule count exposed a polluted data file. Now a
+screenshot exposed charts that had never drawn.
+
+The pattern is consistent enough to be worth stating as a rule: **automated checks
+verify that something is true; only rendering verifies that it is legible.** Those
+are different properties, and a system a human has to operate needs both.
+
 ### Tomorrow
 
 Live integration once credentials exist, then the video.
