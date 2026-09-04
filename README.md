@@ -198,7 +198,7 @@ python -m pytest -q
 ```
 
 ```bash
-python -c "from recoup.generator.synthetic import ScenarioGenerator; from recoup.measure.harness import run, compare; from recoup.policy.strategies import STRATEGIES; s=ScenarioGenerator().generate(5000); print(compare([run(s,f,n) for n,f in STRATEGIES.items()]))"
+python -m recoup.compare
 ```
 
 ## Audit trail
