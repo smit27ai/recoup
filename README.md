@@ -142,6 +142,9 @@ if `test_aa_null` fails, no other number this project reports can be trusted.
 One command, no configuration, no credentials, no network:
 
 ```bash
+pip install -e ".[dev,console,workflows]"
+```
+```bash
 python -m recoup -n 300
 ```
 
@@ -186,15 +189,16 @@ which is what makes the control arm interpretable rather than a hole in the data
 Setup:
 
 ```bash
-python -m venv .venv && .venv/Scripts/pip install -e ".[dev]"
+python -m venv .venv
+.venv\Scripts\pip install -e ".[dev,console,workflows]"
 ```
 
 ```bash
-PYTHONPATH=src .venv/Scripts/python -m pytest -q
+python -m pytest -q
 ```
 
 ```bash
-PYTHONPATH=src .venv/Scripts/python -c "from recoup.generator.synthetic import ScenarioGenerator; from recoup.measure.harness import run, compare; from recoup.policy.strategies import STRATEGIES; s=ScenarioGenerator().generate(5000); print(compare([run(s,f,n) for n,f in STRATEGIES.items()]))"
+python -c "from recoup.generator.synthetic import ScenarioGenerator; from recoup.measure.harness import run, compare; from recoup.policy.strategies import STRATEGIES; s=ScenarioGenerator().generate(5000); print(compare([run(s,f,n) for n,f in STRATEGIES.items()]))"
 ```
 
 ## Audit trail
